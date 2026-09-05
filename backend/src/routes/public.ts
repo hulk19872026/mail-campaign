@@ -230,10 +230,35 @@ publicRouter.post(
 
 /* --------------------------------- health --------------------------------- */
 
+/**
+ * Which commit is actually running. Railway sets these in the container, so this
+ * answers "did my change deploy?" without guessing — a fix that is committed but
+ * not deployed looks exactly like a fix that did not work.
+ */
+function deployedRevision() {
+  const sha = process.env.RAILWAY_GIT_COMMIT_SHA ?? '';
+  return {
+    commit: sha ? sha.slice(0, 7) : 'unknown',
+    branch: process.env.RAILWAY_GIT_BRANCH ?? 'unknown',
+    startedAt: new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString(),
+  };
+}
+
 publicRouter.get('/healthz', async (_req, res) => {
   try {
     await query('SELECT 1');
-    res.json({ status: 'ok', database: databaseTarget(), time: new Date().toISOString() });
+    // The number of sign-in accounts, never their addresses: enough to tell
+    // "no account exists" apart from "wrong password" without naming anyone.
+    const [{ count }] = await query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM users'
+    );
+    res.json({
+      status: 'ok',
+      database: databaseTarget(),
+      accounts: Number(count),
+      ...deployedRevision(),
+      time: new Date().toISOString(),
+    });
   } catch (err) {
     // Say which database could not be reached: when sign-in fails because the
     // database is down, this page is the quickest way to confirm it.
@@ -241,6 +266,7 @@ publicRouter.get('/healthz', async (_req, res) => {
       status: 'degraded',
       database: databaseTarget(),
       error: String((err as any)?.message ?? err),
+      ...deployedRevision(),
       time: new Date().toISOString(),
     });
   }

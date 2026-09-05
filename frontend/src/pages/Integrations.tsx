@@ -9,6 +9,8 @@ export default function Integrations() {
   const [syncing, setSyncing] = useState(false);
   const [testing, setTesting] = useState('');
   const [testEmail, setTestEmail] = useState('');
+  const [businesses, setBusinesses] = useState<{ id: string; name: string }[]>([]);
+  const [choosing, setChoosing] = useState('');
   const toast = useToast();
 
   const load = () => {
@@ -42,15 +44,33 @@ export default function Integrations() {
   const test = async (service: 'wave' | 'resend') => {
     setTesting(service);
     try {
-      const result = await api.post<{ connected: boolean; message: string }>(
-        `/api/integrations/${service}/test`
-      );
+      const result = await api.post<{
+        connected: boolean;
+        message: string;
+        businesses?: { id: string; name: string }[];
+      }>(`/api/integrations/${service}/test`);
       toast.push(result.connected ? 'success' : 'error', result.message);
+      // Keep the businesses on the page rather than only in the toast: the id is
+      // long, and a toast cuts off the very value needed to fix the problem.
+      if (service === 'wave') setBusinesses(result.businesses ?? []);
       load();
     } catch (err) {
       toast.push('error', errorText(err));
     } finally {
       setTesting('');
+    }
+  };
+
+  const chooseBusiness = async (business: { id: string; name: string }) => {
+    setChoosing(business.id);
+    try {
+      await api.put('/api/settings', { wave_business_id: business.id });
+      toast.push('success', `Now syncing customers from ${business.name}.`);
+      load();
+    } catch (err) {
+      toast.push('error', errorText(err));
+    } finally {
+      setChoosing('');
     }
   };
 
@@ -110,6 +130,43 @@ export default function Integrations() {
           <p className="mt-3 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-white">
             {data.wave.lastSync.error}
           </p>
+        )}
+
+        {businesses.length > 0 && (
+          <div className="mt-4 rounded-lg border border-line bg-ink/40 p-3">
+            <p className="text-xs text-muted">
+              Businesses on this Wave token. Choose the one to import customers from.
+            </p>
+            <ul className="mt-2 space-y-2">
+              {businesses.map((business) => {
+                const active = business.id === data.wave.businessId;
+                return (
+                  <li
+                    key={business.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-panel px-3 py-2"
+                  >
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium text-white">{business.name}</span>
+                      <code className="block break-all text-xs text-muted">{business.id}</code>
+                    </span>
+                    {active ? (
+                      <Badge tone="green">
+                        <StatusDot ok />
+                        In use
+                      </Badge>
+                    ) : (
+                      <Button
+                        loading={choosing === business.id}
+                        onClick={() => chooseBusiness(business)}
+                      >
+                        Use this
+                      </Button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         )}
 
         <div className="mt-5 flex flex-wrap gap-2">

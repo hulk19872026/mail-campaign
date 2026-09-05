@@ -9,7 +9,7 @@ import { actorOf, handler, intParam } from '../lib/http';
 import { AppError } from '../lib/errors';
 import { audit } from '../services/activity';
 import { getSettings, saveSettings } from '../services/settings';
-import { lastSync, syncWaveCustomers, testWaveConnection } from '../services/wave';
+import { lastSync, resolveBusinessId, syncWaveCustomers, testWaveConnection } from '../services/wave';
 import { listResendDomains, testResendConnection } from '../services/resend';
 import { schedulerState } from '../services/scheduler';
 import { sentToday } from '../services/campaigns';
@@ -152,11 +152,14 @@ manageRouter.get(
   '/integrations',
   handler(async (_req, res) => {
     const settings = await getSettings();
+    const businessId = await resolveBusinessId();
     const customers = await one<{ count: string }>('SELECT count(*)::text AS count FROM customers');
     res.json({
       wave: {
-        configured: !!env.WAVE_API_TOKEN && !!env.WAVE_BUSINESS_ID,
-        businessId: env.WAVE_BUSINESS_ID ? `${env.WAVE_BUSINESS_ID.slice(0, 8)}…` : '',
+        configured: !!env.WAVE_API_TOKEN && !!businessId,
+        // Shown in full: it is an identifier, not a secret, and a truncated one
+        // cannot be checked against the list Wave returns.
+        businessId,
         lastSync: await lastSync(),
         customers: Number(customers?.count ?? 0),
       },
@@ -221,13 +224,14 @@ manageRouter.get(
   handler(async (_req, res) => {
     const settings = await getSettings();
     const dbOk = await databaseHealthy();
+    const waveBusinessId = await resolveBusinessId();
     const activeCampaign = await one(
       `SELECT id, name FROM campaigns WHERE status='active' ORDER BY created_at LIMIT 1`
     );
     res.json({
       backend: true,
       database: dbOk,
-      wave: !!env.WAVE_API_TOKEN && !!env.WAVE_BUSINESS_ID,
+      wave: !!env.WAVE_API_TOKEN && !!waveBusinessId,
       resend: !!env.RESEND_API_KEY,
       scheduler: schedulerState.enabled && settings.scheduler_enabled,
       lastSchedulerRun: schedulerState.lastRunAt,

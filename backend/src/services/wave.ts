@@ -3,8 +3,11 @@ import { one, query } from '../lib/db';
 import { log } from '../lib/logger';
 import { AppError } from '../lib/errors';
 import { audit, notify } from './activity';
+import { getSettings } from './settings';
 
-const WAVE_ENDPOINT = 'https://gql.waveapps.com/graphql/public';
+// Overridable so the sync can be exercised against a stand-in API in tests.
+// Unset in production, where it is Wave's own endpoint.
+const WAVE_ENDPOINT = process.env.WAVE_ENDPOINT ?? 'https://gql.waveapps.com/graphql/public';
 
 async function waveRequest<T = any>(graphql: string, variables: Record<string, any> = {}): Promise<T> {
   if (!env.WAVE_API_TOKEN) {
@@ -48,12 +51,30 @@ async function waveRequest<T = any>(graphql: string, variables: Record<string, a
   const payload = (await response.json()) as any;
   if (payload.errors?.length) {
     throw new AppError(
-      'Wave refused that request. Check that the Business ID in Settings matches your Wave business.',
+      'Wave refused that request. Press "Test connection" on the Integrations page to pick the right business.',
       400,
       JSON.stringify(payload.errors)
     );
   }
   return payload.data as T;
+}
+
+/**
+ * The business to sync, from Settings if one was chosen there, otherwise from
+ * WAVE_BUSINESS_ID. Settings wins so a wrong id can be corrected in the app.
+ */
+export async function resolveBusinessId(): Promise<string> {
+  const chosen = (await getSettings()).wave_business_id?.trim();
+  return chosen || env.WAVE_BUSINESS_ID.trim();
+}
+
+/** Wave ids are base64 of "Business:<uuid>", so a token pasted here is obvious. */
+function looksLikeBusinessId(value: string): boolean {
+  try {
+    return Buffer.from(value, 'base64').toString('utf8').startsWith('Business:');
+  } catch {
+    return false;
+  }
 }
 
 export async function listBusinesses(): Promise<{ id: string; name: string }[]> {
@@ -63,25 +84,38 @@ export async function listBusinesses(): Promise<{ id: string; name: string }[]> 
   return (data?.businesses?.edges ?? []).map((e: any) => ({ id: e.node.id, name: e.node.name }));
 }
 
-export async function testWaveConnection(): Promise<{ connected: boolean; business?: string; message: string }> {
+export async function testWaveConnection(): Promise<{
+  connected: boolean;
+  business?: string;
+  businessId?: string;
+  businesses: { id: string; name: string }[];
+  message: string;
+}> {
   const businesses = await listBusinesses();
   if (!businesses.length) {
-    return { connected: false, message: 'That token works, but no businesses are visible on it.' };
+    return { connected: false, businesses, message: 'That token works, but no businesses are visible on it.' };
   }
-  const match = env.WAVE_BUSINESS_ID
-    ? businesses.find((b) => b.id === env.WAVE_BUSINESS_ID)
-    : businesses[0];
-  if (env.WAVE_BUSINESS_ID && !match) {
+  const configured = await resolveBusinessId();
+  const match = configured ? businesses.find((b) => b.id === configured) : businesses[0];
+
+  if (configured && !match) {
+    // The full ids go back in `businesses` for the page to list and apply. They
+    // used to appear only inside this sentence, where a toast cut them off and
+    // left the one value needed to fix the problem unreadable.
     return {
       connected: false,
-      message: `The token works, but no business matches WAVE_BUSINESS_ID. Available: ${businesses
-        .map((b) => `${b.name} (${b.id})`)
-        .join(', ')}`,
+      businessId: configured,
+      businesses,
+      message: looksLikeBusinessId(configured)
+        ? 'The token works, but the Business ID does not match any business on it. Pick the right one below.'
+        : 'The token works, but that Business ID is not a Wave business id — it looks like something else was pasted. Pick the right one below.',
     };
   }
   return {
     connected: true,
     business: match?.name,
+    businessId: match?.id,
+    businesses,
     message: `Connected to ${match?.name}.`,
   };
 }
@@ -127,8 +161,12 @@ export type SyncResult = {
 
 /** Pulls every Wave customer with a usable email address into PostgreSQL. */
 export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
-  if (!env.WAVE_BUSINESS_ID) {
-    throw new AppError('Add your Wave Business ID in Settings → Wave before syncing.', 400);
+  const businessId = await resolveBusinessId();
+  if (!businessId) {
+    throw new AppError(
+      'No Wave business is selected yet. Press "Test connection" on the Integrations page and choose one.',
+      400
+    );
   }
 
   const run = await one<{ id: number }>(
@@ -148,12 +186,17 @@ export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
 
     do {
       const data = await waveRequest<any>(CUSTOMERS_QUERY, {
-        businessId: env.WAVE_BUSINESS_ID,
+        businessId,
         page,
         pageSize,
       });
       const biz = data?.business;
-      if (!biz) throw new AppError('That Wave Business ID was not found on this token.', 400);
+      if (!biz) {
+        throw new AppError(
+          'That Wave business was not found on this token. Press "Test connection" and choose one.',
+          400
+        );
+      }
       business = biz.name;
       const info = biz.customers?.pageInfo ?? { totalPages: 1 };
       totalPages = info.totalPages ?? 1;

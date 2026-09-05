@@ -17,6 +17,12 @@ export type AppSettings = {
   reply_to: string;
   logo_url: string;
   accent_color: string;
+  /**
+   * Which Wave business to pull customers from. Kept here rather than only in
+   * WAVE_BUSINESS_ID so it can be chosen in the app: the id is not a secret, and
+   * correcting it should not need an environment variable edit and a redeploy.
+   */
+  wave_business_id: string;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -35,6 +41,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   reply_to: env.RESEND_REPLY_TO || '',
   logo_url: '',
   accent_color: '#22C55E',
+  wave_business_id: env.WAVE_BUSINESS_ID,
 };
 
 const KEY = 'app';

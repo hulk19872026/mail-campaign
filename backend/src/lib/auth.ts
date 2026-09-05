@@ -27,6 +27,27 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
   return bcrypt.compare(plain, hash);
 }
 
+/** A bcrypt hash, not a plaintext password or a truncated column value. */
+export function looksLikeBcryptHash(value: unknown): boolean {
+  return typeof value === 'string' && /^\$2[aby]\$\d{2}\$.{53}$/.test(value);
+}
+
+/**
+ * Warns when a credential arrived with characters that were almost certainly not
+ * meant to be part of it. Pasting into a hosting dashboard picks up a trailing
+ * space or wrapping quotes, and the password that then gets hashed is not the one
+ * anybody types. Reports only the shape of the problem — never the value.
+ */
+function warnAboutStrayCharacters(name: string, value: string): void {
+  if (value !== value.trim()) {
+    log.warn(`${name} starts or ends with whitespace. It is used exactly as stored, spaces included.`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > 1 && /^(".*"|'.*')$/s.test(trimmed)) {
+    log.warn(`${name} is wrapped in quotes. The quotes count as part of the value — remove them.`);
+  }
+}
+
 export function issueSession(res: Response, user: SessionUser): void {
   const token = jwt.sign(user, env.SESSION_SECRET, { expiresIn: `${SESSION_HOURS}h` });
   res.cookie(SESSION_COOKIE, token, {
@@ -78,6 +99,9 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
  * afterwards, or every redeploy undoes your Settings password.
  */
 export async function bootstrapAdmin(): Promise<void> {
+  if (env.ADMIN_EMAIL) warnAboutStrayCharacters('ADMIN_EMAIL', env.ADMIN_EMAIL);
+  if (env.ADMIN_PASSWORD) warnAboutStrayCharacters('ADMIN_PASSWORD', env.ADMIN_PASSWORD);
+
   const email = env.ADMIN_EMAIL.trim().toLowerCase();
   const accounts = await query<{ email: string }>('SELECT email FROM users ORDER BY id');
 
@@ -91,7 +115,7 @@ export async function bootstrapAdmin(): Promise<void> {
   const already = accounts.find((row) => row.email.trim().toLowerCase() === email);
   if (already) {
     if (env.ADMIN_PASSWORD_RESET) {
-      await query('UPDATE users SET password_hash = $2 WHERE lower(email) = $1', [
+      await query('UPDATE users SET password_hash = $2 WHERE lower(btrim(email)) = $1', [
         email,
         await hashPassword(env.ADMIN_PASSWORD),
       ]);

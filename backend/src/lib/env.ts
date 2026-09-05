@@ -1,4 +1,6 @@
+import { randomBytes } from 'crypto';
 import * as dotenv from 'dotenv';
+import { log } from './logger';
 dotenv.config();
 
 function required(name: string, fallback?: string): string {
@@ -11,11 +13,32 @@ function required(name: string, fallback?: string): string {
   return value;
 }
 
+/**
+ * The key that signs session cookies. It used to fall back to a fixed string, so
+ * a deploy without SESSION_SECRET set was signing sessions with a value that is
+ * published in this repository — anyone could mint a valid admin cookie. In
+ * production we now fall back to a random key instead: the app still starts, but
+ * the sessions it issues cannot be forged. Set SESSION_SECRET to stop everyone
+ * being signed out on each deploy.
+ */
+function sessionSecret(): string {
+  const configured = process.env.SESSION_SECRET?.trim();
+  if (configured) return configured;
+  if (process.env.NODE_ENV === 'production') {
+    log.warn(
+      'SESSION_SECRET is not set. Using a random key for this boot, so everyone is signed ' +
+        'out whenever the app restarts. Set SESSION_SECRET to a long random string.'
+    );
+    return randomBytes(48).toString('hex');
+  }
+  return 'dev-secret-not-for-production';
+}
+
 export const env = {
   NODE_ENV: process.env.NODE_ENV ?? 'development',
   PORT: parseInt(process.env.PORT ?? '8080', 10),
   DATABASE_URL: required('DATABASE_URL'),
-  SESSION_SECRET: required('SESSION_SECRET', 'dev-secret-not-for-production'),
+  SESSION_SECRET: sessionSecret(),
   APP_URL: (process.env.APP_URL ?? 'http://localhost:8080').replace(/\/$/, ''),
   UPLOAD_DIR: process.env.UPLOAD_DIR ?? '/data/uploads',
 

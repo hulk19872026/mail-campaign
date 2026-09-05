@@ -46,7 +46,7 @@ async function setPassword(rawEmail: string, password: string): Promise<void> {
   if (password.length < 10) throw new Error('Choose a password of at least 10 characters.');
 
   const hash = await hashPassword(password);
-  const existing = await one<{ id: number }>('SELECT id FROM users WHERE lower(email) = $1', [email]);
+  const existing = await one<{ id: number }>('SELECT id FROM users WHERE lower(btrim(email)) = $1', [email]);
 
   if (existing) {
     await query('UPDATE users SET password_hash = $2 WHERE id = $1', [existing.id, hash]);

@@ -5,6 +5,7 @@ import { AppError } from '../lib/errors';
 import {
   clearSession,
   hashPassword,
+  looksLikeBcryptHash,
   issueSession,
   readSession,
   requireAuth,
@@ -22,7 +23,18 @@ authRouter.post(
     const password = String(req.body?.password ?? '');
     if (!email || !password) throw new AppError('Enter your email address and password.', 400);
 
-    const user = await one<any>('SELECT * FROM users WHERE lower(email) = $1', [email]);
+    // btrim so an address stored with stray whitespace still matches what the
+    // person types. $1 is already trimmed and lowercased above.
+    const user = await one<any>('SELECT * FROM users WHERE lower(btrim(email)) = $1', [email]);
+    if (user && !looksLikeBcryptHash(user.password_hash)) {
+      // Every password check against this row will fail, and it would otherwise
+      // be indistinguishable from a wrong password. Say so; the hash is not
+      // logged, only its shape.
+      log.error(
+        `The stored password for ${email} is not a usable bcrypt hash — reset it with ` +
+          '"node backend/dist/scripts/admin.js set-password <email> <password>".'
+      );
+    }
     if (!user || !(await verifyPassword(password, user.password_hash))) {
       // The reply stays vague on purpose — it must not tell a stranger which
       // addresses have accounts. The server log may say so; only you read it.

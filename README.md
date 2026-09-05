@@ -89,6 +89,22 @@ address keeps its own account until you delete it.
    `ADMIN_PASSWORD_RESET=true` alongside `ADMIN_PASSWORD` and redeploy. That resets the
    password for `ADMIN_EMAIL` to `ADMIN_PASSWORD`. **Remove `ADMIN_PASSWORD_RESET` afterwards**
    — while it is set, every deploy overwrites whatever password you chose under Settings.
+3. Or skip the redeploy entirely and fix the account directly. Open the Railway shell for the
+   service (**Service → the running deployment → Shell**) and run:
+
+   ```bash
+   node backend/dist/scripts/admin.js list
+   node backend/dist/scripts/admin.js set-password david@hulkautomation.com "your new password"
+   ```
+
+   `list` prints every account, so a typo or a leftover address from an earlier `ADMIN_EMAIL`
+   shows up straight away. `set-password` sets that address's password, creating the account
+   if it does not exist. It takes effect immediately — sign in without restarting anything.
+
+Sign-in failures are also written to the service log, and they say which half was wrong:
+`the account exists, the password did not match` or `no account has that address`. The reply
+in the browser stays vague on purpose — it must not tell a stranger which addresses have
+accounts.
 
 ---
 
@@ -178,6 +194,10 @@ UPLOAD_DIR=/tmp/hulk-uploads
 # two terminals
 cd backend  && npm run dev     # API on :8080
 cd frontend && npm run dev     # UI on :5173, proxies to the API
+
+# accounts, when you cannot sign in
+cd backend && npm run admin -- list
+cd backend && npm run admin -- set-password david@hulkautomation.com "your new password"
 ```
 
 ---

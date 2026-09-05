@@ -11,6 +11,7 @@ import {
   verifyPassword,
 } from '../lib/auth';
 import { audit } from '../services/activity';
+import { log } from '../lib/logger';
 
 export const authRouter = Router();
 
@@ -23,6 +24,13 @@ authRouter.post(
 
     const user = await one<any>('SELECT * FROM users WHERE lower(email) = $1', [email]);
     if (!user || !(await verifyPassword(password, user.password_hash))) {
+      // The reply stays vague on purpose — it must not tell a stranger which
+      // addresses have accounts. The server log may say so; only you read it.
+      log.warn(
+        user
+          ? `Sign-in failed for ${email}: the account exists, the password did not match.`
+          : `Sign-in failed for ${email}: no account has that address.`
+      );
       throw new AppError("That email and password don't match an account.", 401);
     }
     await query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);

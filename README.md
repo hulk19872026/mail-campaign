@@ -52,7 +52,7 @@ flyers disappear on each deploy.
 | `DATABASE_URL` | Railway service variables | `${{Postgres.DATABASE_URL}}` | Dashboard → System status shows Database connected |
 | `SESSION_SECRET` | Railway service variables | A long random string (40+ chars) | You stay signed in after a refresh |
 | `APP_URL` | Railway service variables | Your public URL, e.g. `https://marketing.hulkautomation.com` | Unsubscribe links in a test email open your app |
-| `ADMIN_EMAIL` | Railway service variables | Your email address | Used once, on first boot, to create your login |
+| `ADMIN_EMAIL` | Railway service variables | `david@hulkautomation.com` | Creates your login on boot; change it later and the new address gets an account too |
 | `ADMIN_PASSWORD` | Railway service variables | A strong password | You can sign in; change it in Settings afterwards |
 | `WAVE_API_TOKEN` | Railway service variables | Wave full-access token (below) | Integrations → Test connection |
 | `WAVE_BUSINESS_ID` | Railway service variables | Your Wave business ID (below) | Integrations → Sync customers imports people |
@@ -156,7 +156,7 @@ cd ../frontend && npm install
 DATABASE_URL=postgresql://user:pass@localhost:5432/hulk
 SESSION_SECRET=anything-long-for-development
 APP_URL=http://localhost:8080
-ADMIN_EMAIL=you@hulkautomation.com
+ADMIN_EMAIL=david@hulkautomation.com
 ADMIN_PASSWORD=pick-something
 UPLOAD_DIR=/tmp/hulk-uploads
 

@@ -42,7 +42,7 @@ export default function Login({ onSignedIn }: { onSignedIn: (user: any) => void 
               value={email}
               autoComplete="username"
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@hulkautomation.com"
+              placeholder="david@hulkautomation.com"
               required
             />
           </Field>

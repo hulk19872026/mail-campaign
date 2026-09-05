@@ -63,20 +63,40 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
-/** Creates the first account from ADMIN_EMAIL / ADMIN_PASSWORD if no users exist yet. */
+/**
+ * Makes sure ADMIN_EMAIL can sign in.
+ *
+ * On a fresh database this creates the first account. On an existing database it
+ * also creates the account when ADMIN_EMAIL was changed after the first boot —
+ * otherwise the old address stays the only way in and the new one is rejected
+ * with "That email and password don't match an account." Accounts that already
+ * exist are never touched, so a password changed under Settings survives.
+ */
 export async function bootstrapAdmin(): Promise<void> {
+  const email = env.ADMIN_EMAIL.trim().toLowerCase();
   const existing = await one<{ count: string }>('SELECT count(*)::text AS count FROM users');
-  if (existing && Number(existing.count) > 0) return;
-  if (!env.ADMIN_EMAIL || !env.ADMIN_PASSWORD) {
-    log.warn('No users exist and ADMIN_EMAIL / ADMIN_PASSWORD are not set — nobody can sign in yet.');
+  const userCount = Number(existing?.count ?? 0);
+
+  if (!email || !env.ADMIN_PASSWORD) {
+    if (userCount === 0) {
+      log.warn('No users exist and ADMIN_EMAIL / ADMIN_PASSWORD are not set — nobody can sign in yet.');
+    }
     return;
   }
+
+  const already = await one<{ id: number }>('SELECT id FROM users WHERE lower(email) = $1', [email]);
+  if (already) return;
+
   const hash = await hashPassword(env.ADMIN_PASSWORD);
   await query('INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4)', [
-    env.ADMIN_EMAIL.trim().toLowerCase(),
+    email,
     hash,
-    env.ADMIN_EMAIL.split('@')[0].replace(/\W+/g, ' ').trim() || 'Admin',
+    email.split('@')[0].replace(/\W+/g, ' ').trim() || 'Admin',
     'admin',
   ]);
-  log.info(`Created the first account for ${env.ADMIN_EMAIL}`);
+  log.info(
+    userCount === 0
+      ? `Created the first account for ${email}`
+      : `Created an account for ${email} from ADMIN_EMAIL — ${userCount} other account(s) still exist`
+  );
 }

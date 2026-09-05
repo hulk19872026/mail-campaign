@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { one, query } from '../lib/db';
+import { databaseTarget, one, query } from '../lib/db';
 import { verifyToken } from '../lib/tokens';
 import { handler } from '../lib/http';
 import { log } from '../lib/logger';
@@ -233,8 +233,15 @@ publicRouter.post(
 publicRouter.get('/healthz', async (_req, res) => {
   try {
     await query('SELECT 1');
-    res.json({ status: 'ok', time: new Date().toISOString() });
-  } catch {
-    res.status(503).json({ status: 'degraded' });
+    res.json({ status: 'ok', database: databaseTarget(), time: new Date().toISOString() });
+  } catch (err) {
+    // Say which database could not be reached: when sign-in fails because the
+    // database is down, this page is the quickest way to confirm it.
+    res.status(503).json({
+      status: 'degraded',
+      database: databaseTarget(),
+      error: String((err as any)?.message ?? err),
+      time: new Date().toISOString(),
+    });
   }
 });

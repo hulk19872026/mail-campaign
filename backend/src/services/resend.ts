@@ -2,7 +2,10 @@ import crypto from 'crypto';
 import { env } from '../lib/env';
 import { AppError } from '../lib/errors';
 
-const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+// Overridable so the integration can be exercised against a stand-in API in
+// tests. Unset in production, where it is Resend's own API.
+const RESEND_API = process.env.RESEND_API_BASE ?? 'https://api.resend.com';
+const RESEND_ENDPOINT = `${RESEND_API}/emails`;
 
 export type OutgoingEmail = {
   to: string;
@@ -82,11 +85,25 @@ export async function testResendConnection(): Promise<{ connected: boolean; mess
     return { connected: false, message: 'No Resend API key is set yet.' };
   }
   try {
-    const res = await fetch('https://api.resend.com/domains', {
+    const res = await fetch(`${RESEND_API}/domains`, {
       headers: { Authorization: `Bearer ${env.RESEND_API_KEY}` },
     });
-    if (res.status === 401 || res.status === 403) {
-      return { connected: false, message: 'Resend rejected the API key. Generate a new one.' };
+    if (res.status === 401) {
+      return {
+        connected: false,
+        message: 'Resend rejected the API key — it is invalid or has been revoked. Create a new one and put it in RESEND_API_KEY.',
+      };
+    }
+    if (res.status === 403) {
+      // 403 is not a bad key: Resend accepted it and refused this one endpoint.
+      // A key created with sending-only access cannot read the domain list, and
+      // telling its owner to generate a new one sends them in a circle.
+      return {
+        connected: true,
+        message:
+          'The API key works, but it is not allowed to read your domains, so verification status cannot be shown here. ' +
+          'That is normal for a key created with sending-only access — sending is unaffected. Use a full-access key to see domains here.',
+      };
     }
     if (!res.ok) {
       return { connected: false, message: `Resend responded with ${res.status}. Try again shortly.` };
@@ -107,7 +124,7 @@ export async function testResendConnection(): Promise<{ connected: boolean; mess
 
 export async function listResendDomains(): Promise<{ name: string; status: string }[]> {
   if (!env.RESEND_API_KEY) return [];
-  const res = await fetch('https://api.resend.com/domains', {
+  const res = await fetch(`${RESEND_API}/domains`, {
     headers: { Authorization: `Bearer ${env.RESEND_API_KEY}` },
   });
   if (!res.ok) return [];

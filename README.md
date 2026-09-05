@@ -54,6 +54,7 @@ flyers disappear on each deploy.
 | `APP_URL` | Railway service variables | Your public URL, e.g. `https://marketing.hulkautomation.com` | Unsubscribe links in a test email open your app |
 | `ADMIN_EMAIL` | Railway service variables | `david@hulkautomation.com` | Creates your login on boot; change it later and the new address gets an account too |
 | `ADMIN_PASSWORD` | Railway service variables | A strong password | You can sign in; change it in Settings afterwards |
+| `ADMIN_PASSWORD_RESET` | Railway service variables | Leave unset; `true` only to recover a lost password | Next deploy resets the `ADMIN_EMAIL` password — unset it again afterwards |
 | `WAVE_API_TOKEN` | Railway service variables | Wave full-access token (below) | Integrations → Test connection |
 | `WAVE_BUSINESS_ID` | Railway service variables | Your Wave business ID (below) | Integrations → Sync customers imports people |
 | `RESEND_API_KEY` | Railway service variables | Resend key starting `re_` | Integrations → Test connection |
@@ -73,8 +74,21 @@ Put that address in `APP_URL` and redeploy.
 ### 6. Sign in
 
 Open the URL, sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`, then change your password under
-Settings. The account is created only when the users table is empty, so changing those
-variables later does nothing.
+Settings.
+
+Every boot checks that `ADMIN_EMAIL` has an account and creates one if it does not, so
+changing `ADMIN_EMAIL` later and redeploying gives the new address a working login. The old
+address keeps its own account until you delete it.
+
+**If sign-in says "That email and password don't match an account":**
+
+1. Confirm `ADMIN_EMAIL` is exactly the address you are typing, and redeploy — the check runs
+   at boot, not while the app is running. The deploy log says `Sign-in account ready for ...`
+   or `Created an account for ...`, and names the accounts that already exist.
+2. If the address is right and the *password* is what does not match, set
+   `ADMIN_PASSWORD_RESET=true` alongside `ADMIN_PASSWORD` and redeploy. That resets the
+   password for `ADMIN_EMAIL` to `ADMIN_PASSWORD`. **Remove `ADMIN_PASSWORD_RESET` afterwards**
+   — while it is set, every deploy overwrites whatever password you chose under Settings.
 
 ---
 
@@ -158,6 +172,7 @@ SESSION_SECRET=anything-long-for-development
 APP_URL=http://localhost:8080
 ADMIN_EMAIL=david@hulkautomation.com
 ADMIN_PASSWORD=pick-something
+# ADMIN_PASSWORD_RESET=true   # only to reset a forgotten password, then remove it
 UPLOAD_DIR=/tmp/hulk-uploads
 
 # two terminals

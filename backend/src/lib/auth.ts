@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { NextFunction, Request, Response } from 'express';
 import { env, isProd } from './env';
-import { one, query } from './db';
+import { query } from './db';
 import { log } from './logger';
 
 export const SESSION_COOKIE = 'hulk_session';
@@ -69,34 +69,53 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
  * On a fresh database this creates the first account. On an existing database it
  * also creates the account when ADMIN_EMAIL was changed after the first boot —
  * otherwise the old address stays the only way in and the new one is rejected
- * with "That email and password don't match an account." Accounts that already
- * exist are never touched, so a password changed under Settings survives.
+ * with "That email and password don't match an account."
+ *
+ * An account that already exists keeps its password, so one changed under
+ * Settings survives a redeploy. Set ADMIN_PASSWORD_RESET=true to force that
+ * account's password back to ADMIN_PASSWORD on the next boot — the way back in
+ * when the password itself is what no longer matches. Remove the variable
+ * afterwards, or every redeploy undoes your Settings password.
  */
 export async function bootstrapAdmin(): Promise<void> {
   const email = env.ADMIN_EMAIL.trim().toLowerCase();
-  const existing = await one<{ count: string }>('SELECT count(*)::text AS count FROM users');
-  const userCount = Number(existing?.count ?? 0);
+  const accounts = await query<{ email: string }>('SELECT email FROM users ORDER BY id');
 
   if (!email || !env.ADMIN_PASSWORD) {
-    if (userCount === 0) {
+    if (accounts.length === 0) {
       log.warn('No users exist and ADMIN_EMAIL / ADMIN_PASSWORD are not set — nobody can sign in yet.');
     }
     return;
   }
 
-  const already = await one<{ id: number }>('SELECT id FROM users WHERE lower(email) = $1', [email]);
-  if (already) return;
+  const already = accounts.find((row) => row.email.trim().toLowerCase() === email);
+  if (already) {
+    if (env.ADMIN_PASSWORD_RESET) {
+      await query('UPDATE users SET password_hash = $2 WHERE lower(email) = $1', [
+        email,
+        await hashPassword(env.ADMIN_PASSWORD),
+      ]);
+      log.warn(
+        `ADMIN_PASSWORD_RESET is set — the password for ${email} is now ADMIN_PASSWORD. ` +
+          'Remove ADMIN_PASSWORD_RESET so the next deploy stops overwriting it.'
+      );
+    } else {
+      log.info(`Sign-in account ready for ${email}`);
+    }
+    return;
+  }
 
-  const hash = await hashPassword(env.ADMIN_PASSWORD);
   await query('INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4)', [
     email,
-    hash,
+    await hashPassword(env.ADMIN_PASSWORD),
     email.split('@')[0].replace(/\W+/g, ' ').trim() || 'Admin',
     'admin',
   ]);
   log.info(
-    userCount === 0
+    accounts.length === 0
       ? `Created the first account for ${email}`
-      : `Created an account for ${email} from ADMIN_EMAIL — ${userCount} other account(s) still exist`
+      : `Created an account for ${email} from ADMIN_EMAIL — existing accounts: ${accounts
+          .map((row) => row.email)
+          .join(', ')}`
   );
 }

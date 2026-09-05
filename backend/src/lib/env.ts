@@ -21,6 +21,7 @@ export const env = {
 
   ADMIN_EMAIL: process.env.ADMIN_EMAIL ?? '',
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD ?? '',
+  ADMIN_PASSWORD_RESET: (process.env.ADMIN_PASSWORD_RESET ?? '').trim().toLowerCase() === 'true',
 
   WAVE_API_TOKEN: process.env.WAVE_API_TOKEN ?? '',
   WAVE_BUSINESS_ID: process.env.WAVE_BUSINESS_ID ?? '',

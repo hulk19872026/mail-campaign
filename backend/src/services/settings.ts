@@ -10,6 +10,8 @@ export type AppSettings = {
   sms_number: string;
   /** The Twilio number text blasts are sent from. */
   sms_from_number: string;
+  /** Put a "Text us" button in every email, even ones built without the block. */
+  sms_button_auto: boolean;
   /** Texts per day, counted separately from the email allowance. */
   sms_daily_limit: number;
   timezone: string;
@@ -38,6 +40,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   support_phone: '',
   sms_number: env.SMS_NUMBER,
   sms_from_number: env.TWILIO_FROM_NUMBER,
+  sms_button_auto: true,
   sms_daily_limit: 99,
   timezone: 'America/New_York',
   daily_limit: 99,

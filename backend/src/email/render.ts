@@ -271,12 +271,41 @@ export function orderBlocks(blocks: Block[]): Block[] {
   return [...rest.slice(0, at), flyer, ...rest.slice(at)];
 }
 
+/**
+ * Guarantees the "Text us" button is in the email.
+ *
+ * The button is a block, so emails built before it existed do not have one —
+ * and those are exactly the campaigns already out sending, which cannot be
+ * edited while active. Rather than rewrite a live campaign's saved blocks, add
+ * the button at render time when the email has none and a number is
+ * configured. It goes beside the main call to action, where someone deciding to
+ * get in touch is already looking.
+ *
+ * An email that does have a block keeps it, wherever it was placed, and turning
+ * off sms_button_auto in Settings stops this entirely.
+ */
+function ensureTextUs(blocks: Block[], ctx: RenderContext): Block[] {
+  if (!ctx.settings.sms_button_auto) return blocks;
+  if (blocks.some((b) => b.type === 'textus')) return blocks;
+  if (!(ctx.settings.sms_number || ctx.settings.support_phone)) return blocks;
+
+  const block: Block = {
+    id: 'textus-auto',
+    type: 'textus',
+    label: 'Text us',
+    message: `Hi ${ctx.settings.company_name}, I have a question.`,
+  };
+  const lastButton = blocks.map((b) => b.type).lastIndexOf('button');
+  const at = lastButton >= 0 ? lastButton + 1 : blocks.length;
+  return [...blocks.slice(0, at), block, ...blocks.slice(at)];
+}
+
 export function renderEmail(
   blocks: Block[],
   ctx: RenderContext
 ): { html: string; text: string } {
   const s = ctx.settings;
-  const ordered = orderBlocks(blocks);
+  const ordered = ensureTextUs(orderBlocks(blocks), ctx);
   const body = ordered.map((b) => renderBlock(b, ctx)).join('');
   const unsub = unsubscribeUrl(ctx);
   const address = s.mailing_address

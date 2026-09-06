@@ -198,6 +198,19 @@ export default function SettingsPage() {
             />
           </Field>
         </div>
+        <div className="mt-4 rounded-xl2 border border-line bg-ink p-4">
+          <Toggle
+            checked={settings.sms_button_auto !== false}
+            onChange={(v: boolean) => setSettings((s: any) => ({ ...s, sms_button_auto: v }))}
+            label={'Put a "Text us" button in every email'}
+          />
+          <p className="mt-2 text-xs text-muted">
+            Emails built before this button existed have no block for it, so it is added next to the
+            main button when it is sent. Emails where you placed the button yourself keep it where you
+            put it.
+          </p>
+        </div>
+
         <p className="mt-4 text-xs text-muted">
           Only customers marked as having agreed to receive texts are ever included in a blast, and a
           reply of STOP removes them automatically. Consent is recorded per customer on the Customers

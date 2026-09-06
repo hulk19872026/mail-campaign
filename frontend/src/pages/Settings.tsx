@@ -101,6 +101,12 @@ export default function SettingsPage() {
           <Field label="Phone shown in emails">
             <Input value={settings.support_phone} onChange={set('support_phone')} />
           </Field>
+          <Field
+            label="Texting number"
+            hint="The number the &ldquo;Text us&rdquo; button opens. Leave empty to use the phone above."
+          >
+            <Input value={settings.sms_number ?? ''} onChange={set('sms_number')} placeholder="+1 732 555 0142" />
+          </Field>
           <Field label="Timezone">
             <Select value={settings.timezone} onChange={set('timezone')}>
               {TIMEZONES.map((tz) => (

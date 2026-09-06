@@ -6,6 +6,8 @@ export type AppSettings = {
   website: string;
   mailing_address: string;
   support_phone: string;
+  /** The number the email's "Text us" button opens. Falls back to support_phone. */
+  sms_number: string;
   timezone: string;
   daily_limit: number;
   batch_size: number;
@@ -30,6 +32,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   website: 'https://hulkautomation.com',
   mailing_address: '',
   support_phone: '',
+  sms_number: '',
   timezone: 'America/New_York',
   daily_limit: 99,
   batch_size: 10,

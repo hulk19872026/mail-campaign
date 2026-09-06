@@ -9,6 +9,7 @@ export type Block =
   | { id: string; type: 'image'; url: string; alt?: string; link?: string }
   | { id: string; type: 'flyer'; caption?: string }
   | { id: string; type: 'button'; label: string; url: string; interest?: string }
+  | { id: string; type: 'textus'; label?: string; message?: string; number?: string }
   | { id: string; type: 'divider' }
   | { id: string; type: 'spacer'; height?: number }
   | { id: string; type: 'plans'; plans?: ('basic' | 'pro' | 'elite')[] }
@@ -96,7 +97,28 @@ export function personalize(text: string, ctx: RenderContext): string {
   return String(text ?? '').replace(/\{\{\s*([a-z_]+)\s*\}\}/gi, (_m, key) => map[String(key).toLowerCase()] ?? '');
 }
 
+/**
+ * Keeps only the digits, and a leading +, so the number is safe inside an
+ * `sms:` link however it was typed in Settings.
+ */
+export function smsHref(number: string, message?: string): string {
+  const trimmed = String(number ?? '').trim();
+  const digits = trimmed.replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  const dialable = trimmed.startsWith('+') ? `+${digits}` : digits;
+  // iOS wants `?&body=`, Android accepts it, so this one form works on both.
+  return message ? `sms:${dialable}?&body=${encodeURIComponent(message)}` : `sms:${dialable}`;
+}
+
+/** The number a "Text us" block dials: its own, else the one in Settings. */
+function textNumber(block: { number?: string }, ctx: RenderContext): string {
+  return block.number?.trim() || ctx.settings.sms_number || ctx.settings.support_phone || '';
+}
+
 function trackedUrl(url: string, ctx: RenderContext, interest?: string): string {
+  // Only http(s) links can travel through the click redirect. Sending `sms:`
+  // or `tel:` through it would break the tap on the phone it is meant for.
+  if (!/^https?:/i.test(url)) return url;
   if (!ctx.tracking || !ctx.recipientId) return url;
   const token = signToken({
     r: ctx.recipientId,
@@ -187,6 +209,20 @@ function renderBlock(block: Block, ctx: RenderContext): string {
       )};color:#0b0f14;font:700 16px/1 Helvetica,Arial,sans-serif;text-decoration:none;">${escapeHtml(
         personalize(block.label, ctx)
       )}</a></td></tr>`;
+    case 'textus': {
+      const href = smsHref(textNumber(block, ctx), personalize(block.message || '', ctx));
+      // With no number configured there is nothing to tap, so show nothing
+      // rather than a dead button.
+      if (!href) return '';
+      const label = personalize(block.label || 'Text us', ctx);
+      return `<tr><td style="padding:6px 32px 18px;"><a href="${escapeHtml(
+        href
+      )}" style="display:inline-block;padding:15px 26px;border-radius:10px;background:#0f1115;color:#ffffff;font:700 16px/1 Helvetica,Arial,sans-serif;text-decoration:none;">${escapeHtml(
+        label
+      )}</a><div style="margin-top:8px;font:400 13px/1.5 Helvetica,Arial,sans-serif;color:#6b7280;">Or text us at ${escapeHtml(
+        textNumber(block, ctx)
+      )}</div></td></tr>`;
+    }
     case 'divider':
       return `<tr><td style="padding:8px 32px;"><div style="height:1px;background:#e5e7eb;"></div></td></tr>`;
     case 'spacer':
@@ -290,6 +326,10 @@ function plainText(blocks: Block[], ctx: RenderContext, unsub: string): string {
     } else if (b.type === 'headline') lines.push(personalize(b.text, ctx), '');
     else if (b.type === 'paragraph') lines.push(personalize(b.text, ctx), '');
     else if (b.type === 'button') lines.push(`${personalize(b.label, ctx)}: ${b.url}`, '');
+    else if (b.type === 'textus') {
+      const number = b.number?.trim() || ctx.settings.sms_number || ctx.settings.support_phone || '';
+      if (number) lines.push(`${personalize(b.label || 'Text us', ctx)}: ${number}`, '');
+    }
     else if (b.type === 'plans')
       for (const key of b.plans?.length ? b.plans : (['basic', 'pro', 'elite'] as const)) {
         const plan = PLANS[key as keyof typeof PLANS];

@@ -10,10 +10,14 @@ import {
   getCampaign,
   previewAudienceCount,
   sentToday,
+  isSms,
   sendTestEmail,
+  sendTestSms,
   setCampaignStatus,
+  smsBodyFor,
   startCampaign,
 } from '../services/campaigns';
+import { smsSegments, twilioConfigured } from '../services/twilio';
 import { renderEmail } from '../email/render';
 import { runSchedulerNow } from '../services/scheduler';
 
@@ -55,8 +59,8 @@ campaignsRouter.get(
     res.json({
       campaign,
       counts,
-      dailyLimit: settings.daily_limit,
-      sentToday: await sentToday(settings),
+      dailyLimit: isSms(campaign) ? settings.sms_daily_limit : settings.daily_limit,
+      sentToday: await sentToday(settings, isSms(campaign) ? 'sms' : 'email'),
       flyerUrl: flyerUrl(campaign),
     });
   })
@@ -95,8 +99,9 @@ campaignsRouter.post(
     const row = await one<Campaign>(
       `INSERT INTO campaigns
         (name, subject, template_id, blocks, audience, audience_days, audience_ids,
-         test_mode, test_email, start_date, send_time, created_by, flyer_path, flyer_name, flyer_kind)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+         test_mode, test_email, start_date, send_time, created_by, flyer_path, flyer_name, flyer_kind,
+         channel, sms_body)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
       [
         b.name,
         b.subject ?? '',
@@ -113,6 +118,8 @@ campaignsRouter.post(
         b.flyer_path ?? null,
         b.flyer_name ?? null,
         b.flyer_kind ?? null,
+        b.channel === 'sms' ? 'sms' : 'email',
+        b.sms_body ?? '',
       ]
     );
     await audit('campaign.created', { actor: actorOf(req), entity: 'campaign', entityId: row!.id });
@@ -137,7 +144,8 @@ campaignsRouter.put(
          audience_ids=COALESCE($8,audience_ids), test_mode=COALESCE($9,test_mode),
          test_email=COALESCE($10,test_email), start_date=COALESCE($11,start_date),
          send_time=COALESCE($12,send_time), flyer_path=COALESCE($13,flyer_path),
-         flyer_name=COALESCE($14,flyer_name), flyer_kind=COALESCE($15,flyer_kind)
+         flyer_name=COALESCE($14,flyer_name), flyer_kind=COALESCE($15,flyer_kind),
+         channel=COALESCE($16,channel), sms_body=COALESCE($17,sms_body)
        WHERE id=$1 RETURNING *`,
       [
         id,
@@ -155,6 +163,8 @@ campaignsRouter.put(
         b.flyer_path ?? null,
         b.flyer_name ?? null,
         b.flyer_kind ?? null,
+        b.channel === 'sms' || b.channel === 'email' ? b.channel : null,
+        typeof b.sms_body === 'string' ? b.sms_body : null,
       ]
     );
     res.json({ campaign: row });
@@ -185,11 +195,15 @@ campaignsRouter.post(
       audience_days: b.audience_days ?? 90,
       audience_ids: b.audience_ids ?? [],
       test_mode: !!b.test_mode,
+      channel: b.channel === 'sms' ? 'sms' : 'email',
+      sms_body: b.sms_body ?? '',
     } as Campaign;
 
+    const sms = isSms(draft);
+    const channel = sms ? 'sms' : 'email';
     const recipients = await previewAudienceCount(draft);
-    const alreadySent = await sentToday(settings);
-    const perDay = settings.daily_limit;
+    const alreadySent = await sentToday(settings, channel);
+    const perDay = sms ? settings.sms_daily_limit : settings.daily_limit;
     const days = Math.max(1, Math.ceil(recipients / perDay));
 
     const { html } = renderEmail(b.blocks ?? [], {
@@ -207,14 +221,27 @@ campaignsRouter.post(
       tracking: false,
     });
 
+    // What a text blast needs confirming is different: the exact message that
+    // goes out, and how many segments each one is billed as.
+    const body = sms
+      ? smsBodyFor(draft, {
+          settings,
+          customer: { id: null, first_name: 'John', last_name: 'Smith', company_name: 'ABC Security', email: '' },
+        })
+      : '';
+
     res.json({
       recipients,
+      channel,
       dailyLimit: perDay,
       sentToday: alreadySent,
       estimatedDays: days,
-      from: `${settings.from_name} <${settings.from_email}>`,
+      from: sms ? settings.sms_from_number : `${settings.from_name} <${settings.from_email}>`,
       subject: b.subject ?? '',
       html,
+      smsBody: body,
+      smsSegments: sms ? smsSegments(body) : null,
+      smsReady: sms ? twilioConfigured() && Boolean(settings.sms_from_number) : true,
     });
   })
 );
@@ -253,9 +280,22 @@ campaignsRouter.post(
 campaignsRouter.post(
   '/:id/test',
   handler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const campaign = await getCampaign(id);
+    if (!campaign) throw new AppError('That campaign was not found.', 404);
+
+    if (isSms(campaign)) {
+      const phone = String(req.body?.phone ?? req.body?.email ?? '').trim();
+      if (phone.replace(/[^0-9]/g, '').length < 10)
+        throw new AppError('Enter the number the test text should go to.', 400);
+      await sendTestSms(id, phone);
+      res.json({ ok: true, message: `Test text sent to ${phone}.` });
+      return;
+    }
+
     const address = String(req.body?.email ?? '').trim();
     if (!address.includes('@')) throw new AppError('Enter the address the test should go to.', 400);
-    await sendTestEmail(intParam(req.params.id), address);
+    await sendTestEmail(id, address);
     res.json({ ok: true, message: `Test email sent to ${address}.` });
   })
 );

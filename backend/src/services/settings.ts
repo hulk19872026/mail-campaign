@@ -8,6 +8,10 @@ export type AppSettings = {
   support_phone: string;
   /** The number the email's "Text us" button opens. Falls back to support_phone. */
   sms_number: string;
+  /** The Twilio number text blasts are sent from. */
+  sms_from_number: string;
+  /** Texts per day, counted separately from the email allowance. */
+  sms_daily_limit: number;
   timezone: string;
   daily_limit: number;
   batch_size: number;
@@ -33,6 +37,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mailing_address: '',
   support_phone: '',
   sms_number: env.SMS_NUMBER,
+  sms_from_number: env.TWILIO_FROM_NUMBER,
+  sms_daily_limit: 99,
   timezone: 'America/New_York',
   daily_limit: 99,
   batch_size: 10,
@@ -57,6 +63,7 @@ export async function getSettings(force = false): Promise<AppSettings> {
   const value: AppSettings = { ...DEFAULT_SETTINGS, ...(row?.value ?? {}) };
   // Guard rails: the daily limit can be configured, but never to something unsafe.
   value.daily_limit = clamp(num(value.daily_limit, 99), 1, 500);
+  value.sms_daily_limit = clamp(num(value.sms_daily_limit, 99), 1, 500);
   value.batch_size = clamp(num(value.batch_size, 10), 1, 50);
   value.batch_delay_seconds = clamp(num(value.batch_delay_seconds, 30), 0, 3600);
   cache = { value, at: Date.now() };

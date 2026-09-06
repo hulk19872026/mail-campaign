@@ -27,6 +27,9 @@ customersRouter.get(
     if (status === 'active') where += ` AND status='active' AND marketing_opt_out=false`;
     if (status === 'disabled') where += ` AND status='disabled'`;
     if (status === 'unsubscribed') where += ` AND marketing_opt_out=true`;
+    if (status === 'sms_ready')
+      where += ` AND sms_opt_in=true AND phone <> '' AND status='active' AND marketing_opt_out=false`;
+    if (status === 'sms_missing') where += ` AND sms_opt_in=false AND phone <> ''`;
 
     const orderBy =
       sort === 'recent'
@@ -124,6 +127,10 @@ customersRouter.put(
          address=COALESCE($7,address), city=COALESCE($8,city), province=COALESCE($9,province),
          postal_code=COALESCE($10,postal_code), country=COALESCE($11,country),
          status=COALESCE($12,status), marketing_opt_out=COALESCE($13,marketing_opt_out),
+         sms_opt_in=COALESCE($14,sms_opt_in),
+         sms_opt_in_at = CASE WHEN $14 IS TRUE AND sms_opt_in = false THEN now()
+                              WHEN $14 IS FALSE THEN sms_opt_in_at ELSE sms_opt_in_at END,
+         sms_opt_out_at = CASE WHEN $14 IS FALSE THEN now() ELSE sms_opt_out_at END,
          updated_at=now()
        WHERE id=$1 RETURNING *`,
       [
@@ -140,6 +147,7 @@ customersRouter.put(
         b.country ?? null,
         b.status ?? null,
         typeof b.marketing_opt_out === 'boolean' ? b.marketing_opt_out : null,
+        typeof b.sms_opt_in === 'boolean' ? b.sms_opt_in : null,
       ]
     );
     if (!row) throw new AppError('That customer was not found.', 404);
@@ -173,6 +181,20 @@ customersRouter.post(
         [ids]
       );
     else if (action === 'delete') await query('DELETE FROM customers WHERE id = ANY($1)', [ids]);
+    // Recording texting consent in bulk is for customers who have already given
+    // it — on a signed work order, a form, or in writing. It is not a way to
+    // opt people in who never agreed, and the timestamp is what evidences it.
+    else if (action === 'sms_opt_in')
+      await query(
+        `UPDATE customers SET sms_opt_in=true, sms_opt_in_at=now(), sms_opt_out_at=NULL
+          WHERE id = ANY($1) AND phone <> ''`,
+        [ids]
+      );
+    else if (action === 'sms_opt_out')
+      await query(
+        `UPDATE customers SET sms_opt_in=false, sms_opt_out_at=now() WHERE id = ANY($1)`,
+        [ids]
+      );
     else throw new AppError('That action is not available.', 400);
 
     await audit(`customer.bulk_${action}`, { actor: actorOf(req), details: { count: ids.length } });

@@ -4,23 +4,49 @@ import { AlertTriangle, Check, Upload } from 'lucide-react';
 import { api, errorText } from '../lib/api';
 import { formatNumber } from '../lib/format';
 import EmailEditor, { Block } from '../components/EmailEditor';
-import { Badge, Button, Card, Field, HelpTip, Input, Radio, Select, Toggle, useToast } from '../components/ui';
+import { Badge, Button, Card, Field, HelpTip, Input, Radio, Select, Textarea, Toggle, useToast } from '../components/ui';
 
-const STEPS = [
-  'Name',
-  'Customers',
-  'Template',
-  'Flyer',
-  'Subject',
-  'Email',
-  'Schedule',
-  'Review',
-];
+// Steps are keyed rather than numbered: a text blast skips the template, flyer,
+// subject and email builder, so position alone cannot say which screen is which.
+const EMAIL_STEPS = ['name', 'customers', 'template', 'flyer', 'subject', 'email', 'schedule', 'review'] as const;
+const SMS_STEPS = ['name', 'customers', 'message', 'schedule', 'review'] as const;
+
+type StepKey = (typeof EMAIL_STEPS)[number] | (typeof SMS_STEPS)[number];
+
+const STEP_LABELS: Record<StepKey, string> = {
+  name: 'Name',
+  customers: 'Customers',
+  template: 'Template',
+  flyer: 'Flyer',
+  subject: 'Subject',
+  email: 'Email',
+  message: 'Message',
+  schedule: 'Schedule',
+  review: 'Review',
+};
+
+/**
+ * GSM-7 fits 160 characters in one segment, 153 each once a message needs
+ * several; anything outside that alphabet halves it. Each segment is billed
+ * separately, which is worth seeing before a blast goes out.
+ */
+function segmentsOf(body: string): { characters: number; segments: number; unicode: boolean } {
+  const gsm =
+    /^[A-Za-z0-9@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-./:;<=>?¡ÄÖÑÜ§¿äöñüà\n\r\f^{}\\[~\]|€]*$/;
+  const unicode = !gsm.test(body);
+  const single = unicode ? 70 : 160;
+  const multi = unicode ? 67 : 153;
+  const characters = body.length;
+  const segments = characters === 0 ? 0 : characters <= single ? 1 : Math.ceil(characters / multi);
+  return { characters, segments, unicode };
+}
 
 type Template = { id: number; name: string; description: string; subject: string; blocks: Block[] };
 
 export default function CampaignWizard() {
   const [step, setStep] = useState(0);
+  const [channel, setChannel] = useState<'email' | 'sms'>('email');
+  const [smsBody, setSmsBody] = useState('');
   const [templates, setTemplates] = useState<Template[]>([]);
   const [name, setName] = useState('');
   const [audience, setAudience] = useState('active');
@@ -40,6 +66,10 @@ export default function CampaignWizard() {
   const toast = useToast();
   const navigate = useNavigate();
 
+  const isSms = channel === 'sms';
+  const steps: readonly StepKey[] = isSms ? SMS_STEPS : EMAIL_STEPS;
+  const current = steps[Math.min(step, steps.length - 1)];
+
   useEffect(() => {
     api
       .get<{ templates: Template[] }>('/api/templates')
@@ -48,7 +78,7 @@ export default function CampaignWizard() {
   }, []);
 
   useEffect(() => {
-    if (step !== 7) return;
+    if (current !== 'review') return;
     api
       .post('/api/campaigns/preview', {
         audience,
@@ -56,11 +86,13 @@ export default function CampaignWizard() {
         test_mode: testMode,
         blocks,
         subject,
+        channel,
+        sms_body: smsBody,
         flyer_path: flyer?.path,
       })
       .then(setPreview)
       .catch((err) => toast.push('error', errorText(err)));
-  }, [step]);
+  }, [step, current]);
 
   const chooseTemplate = (template: Template) => {
     setTemplateId(template.id);
@@ -101,12 +133,14 @@ export default function CampaignWizard() {
         test_email: testEmail || null,
         start_date: startChoice === 'date' ? startDate : null,
         send_time: sendTime,
+        channel,
+        sms_body: smsBody,
         flyer_path: flyer?.path ?? null,
         flyer_name: flyer?.name ?? null,
         flyer_kind: flyer?.kind ?? null,
       });
       await api.post(`/api/campaigns/${created.campaign.id}/start`);
-      toast.push('success', 'Campaign started. The system takes it from here.');
+      toast.push('success', isSms ? 'Text blast started.' : 'Campaign started. The system takes it from here.');
       navigate(`/campaigns/${created.campaign.id}`);
     } catch (err) {
       toast.push('error', errorText(err));
@@ -116,8 +150,9 @@ export default function CampaignWizard() {
   };
 
   const sendTest = async () => {
-    if (!testEmail.includes('@')) {
-      toast.push('error', 'Enter the address the test should go to.');
+    const target = testEmail.trim();
+    if (isSms ? target.replace(/[^0-9]/g, '').length < 10 : !target.includes('@')) {
+      toast.push('error', isSms ? 'Enter the number the test text should go to.' : 'Enter the address the test should go to.');
       return;
     }
     try {
@@ -128,40 +163,43 @@ export default function CampaignWizard() {
         blocks,
         audience,
         audience_days: audienceDays,
+        channel,
+        sms_body: smsBody,
         flyer_path: flyer?.path ?? null,
         flyer_name: flyer?.name ?? null,
         flyer_kind: flyer?.kind ?? null,
       });
-      await api.post(`/api/campaigns/${created.campaign.id}/test`, { email: testEmail });
-      toast.push('success', `Test sent to ${testEmail}. The draft was saved.`);
+      await api.post(`/api/campaigns/${created.campaign.id}/test`, isSms ? { phone: target } : { email: target });
+      toast.push('success', `Test sent to ${target}. The draft was saved.`);
     } catch (err) {
       toast.push('error', errorText(err));
     }
   };
 
-  const canContinue = [
-    name.trim().length > 0,
-    true,
-    blocks.length > 0,
-    true,
-    subject.trim().length > 0,
-    blocks.length > 0,
-    !testMode || testEmail.includes('@'),
-    true,
-  ][step];
+  const canContinue: Record<StepKey, boolean> = {
+    name: name.trim().length > 0,
+    customers: true,
+    template: blocks.length > 0,
+    flyer: true,
+    subject: subject.trim().length > 0,
+    email: blocks.length > 0,
+    message: smsBody.trim().length > 0,
+    schedule: !testMode || testEmail.trim().length > 0,
+    review: true,
+  };
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-white">Create campaign</h1>
         <p className="mt-1 text-sm text-muted">
-          Eight short steps. Nothing sends until you press start on the last one.
+          {steps.length} short steps. Nothing sends until you press start on the last one.
         </p>
       </div>
 
       <ol className="flex flex-wrap gap-2">
-        {STEPS.map((label, index) => (
-          <li key={label}>
+        {steps.map((key, index) => (
+          <li key={key}>
             <button
               onClick={() => index < step && setStep(index)}
               className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium ${
@@ -173,7 +211,7 @@ export default function CampaignWizard() {
               }`}
             >
               {index < step ? <Check className="h-3.5 w-3.5" /> : <span>{index + 1}</span>}
-              {label}
+              {STEP_LABELS[key]}
             </button>
           </li>
         ))}
@@ -183,28 +221,59 @@ export default function CampaignWizard() {
         <div className="flex items-center gap-3 rounded-xl2 border border-warn/40 bg-warn/10 px-4 py-3">
           <AlertTriangle className="h-5 w-5 shrink-0 text-warn" />
           <p className="text-sm font-medium text-white">
-            Test mode is on — no customers will receive this campaign. It goes only to {testEmail || 'your test address'}.
+            Test mode is on — no customers will receive this campaign. It goes only to{' '}
+            {testEmail || (isSms ? 'your test number' : 'your test address')}.
           </p>
         </div>
       )}
 
       <Card>
-        {step === 0 && (
-          <Field label="Campaign name" hint="Only you see this. It keeps your list organised.">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="September maintenance contract campaign"
-              autoFocus
-            />
-          </Field>
+        {current === 'name' && (
+          <div className="space-y-5">
+            <Field label="Campaign name" hint="Only you see this. It keeps your list organised.">
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="September maintenance contract campaign"
+                autoFocus
+              />
+            </Field>
+
+            <div className="space-y-3 border-t border-line pt-5">
+              <p className="text-sm font-medium text-white">How should this go out?</p>
+              <Radio
+                checked={channel === 'email'}
+                onChange={() => {
+                  setChannel('email');
+                  setStep(0);
+                }}
+                label="Email campaign"
+                description="The full email builder, with a flyer, plans and buttons."
+              />
+              <Radio
+                checked={channel === 'sms'}
+                onChange={() => {
+                  setChannel('sms');
+                  setStep(0);
+                }}
+                label="Text blast"
+                description="A short text message. Only customers who have agreed to receive texts are included."
+              />
+            </div>
+          </div>
         )}
 
-        {step === 1 && (
+        {current === 'customers' && (
           <div className="space-y-3">
             <p className="text-sm text-muted">
               Unsubscribed customers are always excluded, whichever option you pick.
             </p>
+            {isSms && (
+              <div className="rounded-xl2 border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-white">
+                A text blast only reaches customers who have a phone number and are marked as having
+                agreed to receive texts. Everyone else is skipped, however you choose here.
+              </div>
+            )}
             <Radio
               checked={audience === 'all'}
               onChange={() => setAudience('all')}
@@ -241,7 +310,7 @@ export default function CampaignWizard() {
           </div>
         )}
 
-        {step === 2 && (
+        {current === 'template' && (
           <div className="grid gap-3 sm:grid-cols-2">
             {templates.map((template) => (
               <button
@@ -271,7 +340,7 @@ export default function CampaignWizard() {
           </div>
         )}
 
-        {step === 3 && (
+        {current === 'flyer' && (
           <div className="space-y-4">
             <input
               ref={fileInput}
@@ -302,7 +371,7 @@ export default function CampaignWizard() {
           </div>
         )}
 
-        {step === 4 && (
+        {current === 'subject' && (
           <Field
             label="Subject line"
             hint="Keep it under about 60 characters so phones don't cut it off."
@@ -316,9 +385,52 @@ export default function CampaignWizard() {
           </Field>
         )}
 
-        {step === 5 && <EmailEditor blocks={blocks} onChange={setBlocks} flyerPath={flyer?.path} />}
+        {current === 'email' && <EmailEditor blocks={blocks} onChange={setBlocks} flyerPath={flyer?.path} />}
 
-        {step === 6 && (
+        {current === 'message' && (
+          <div className="space-y-4">
+            <Field
+              label="Text message"
+              hint="Use {{first_name}}, {{last_name}} or {{company_name}} to personalize. Keep it short — texts are billed per segment."
+            >
+              <Textarea
+                value={smsBody}
+                onChange={(e) => setSmsBody(e.target.value)}
+                rows={5}
+                placeholder="Hi {{first_name}}, HULK Automation has maintenance inspection spots open this month. Reply here or call 212-687-9116."
+                autoFocus
+              />
+            </Field>
+
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              <Badge tone={segmentsOf(smsBody).segments > 1 ? 'amber' : 'green'}>
+                {segmentsOf(smsBody).characters} characters · {segmentsOf(smsBody).segments} segment
+                {segmentsOf(smsBody).segments === 1 ? '' : 's'}
+              </Badge>
+              {segmentsOf(smsBody).unicode && (
+                <span className="text-muted">
+                  Contains characters outside the basic set (an emoji or a curly quote), which cuts a
+                  segment from 160 characters to 70.
+                </span>
+              )}
+            </div>
+
+            <div className="rounded-xl2 border border-line bg-ink p-4">
+              <p className="text-xs text-muted">This is sent as:</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm text-white">
+                {smsBody.trim()
+                  ? `${smsBody.trim()}${/\bSTOP\b/i.test(smsBody) ? '' : '\n\nReply STOP to opt out.'}`
+                  : 'Your message appears here.'}
+              </p>
+              <p className="mt-3 text-xs text-muted">
+                The opt-out line is added automatically when your message does not already have one.
+                Marketing texts are required to carry it.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {current === 'schedule' && (
           <div className="space-y-4">
             <div className="space-y-3">
               <Radio checked={startChoice === 'today'} onChange={() => setStartChoice('today')} label="Start today" />
@@ -347,12 +459,12 @@ export default function CampaignWizard() {
             <div className="rounded-xl2 border border-line bg-ink p-4">
               <Toggle checked={testMode} onChange={setTestMode} label="Test mode — send only to one address" />
               {testMode && (
-                <Field label="Test address" className="mt-3 max-w-sm">
+                <Field label={isSms ? 'Test number' : 'Test address'} className="mt-3 max-w-sm">
                   <Input
-                    type="email"
+                    type={isSms ? 'tel' : 'email'}
                     value={testEmail}
                     onChange={(e) => setTestEmail(e.target.value)}
-                    placeholder="david@hulkautomation.com"
+                    placeholder={isSms ? '+1 212 687 9116' : 'david@hulkautomation.com'}
                   />
                 </Field>
               )}
@@ -360,25 +472,71 @@ export default function CampaignWizard() {
           </div>
         )}
 
-        {step === 7 && (
+        {current === 'review' && (
           <div className="space-y-5">
-            <h2 className="text-lg font-semibold text-white">Campaign ready</h2>
+            <h2 className="text-lg font-semibold text-white">
+              {isSms ? 'Text blast ready' : 'Campaign ready'}
+            </h2>
             <dl className="grid gap-4 sm:grid-cols-2">
               <Summary label="Campaign" value={name} />
-              <Summary label="Recipients" value={formatNumber(preview?.recipients ?? 0)} />
+              <Summary
+                label="Recipients"
+                value={formatNumber(preview?.recipients ?? 0)}
+                hint={isSms ? 'Only customers with a number and texting consent are counted.' : undefined}
+              />
               <Summary
                 label="Daily limit"
-                value={`${preview?.dailyLimit ?? 99} emails per day`}
+                value={`${preview?.dailyLimit ?? 99} ${isSms ? 'texts' : 'emails'} per day`}
                 hint="The system never sends more than this in one calendar day."
               />
               <Summary label="Estimated completion" value={`${preview?.estimatedDays ?? 1} business days`} />
               <Summary label="From" value={preview?.from ?? ''} />
-              <Summary label="Subject" value={subject} />
+              {!isSms && <Summary label="Subject" value={subject} />}
+              {isSms && (
+                <Summary
+                  label="Message size"
+                  value={
+                    preview?.smsSegments
+                      ? `${preview.smsSegments.characters} characters · ${preview.smsSegments.segments} segment${
+                          preview.smsSegments.segments === 1 ? '' : 's'
+                        } each`
+                      : '—'
+                  }
+                  hint="Every segment is billed separately, for every recipient."
+                />
+              )}
             </dl>
+
+            {isSms && preview && !preview.smsReady && (
+              <div className="flex items-center gap-3 rounded-xl2 border border-danger/40 bg-danger/10 px-4 py-3">
+                <AlertTriangle className="h-5 w-5 shrink-0 text-danger" />
+                <p className="text-sm text-white">
+                  Texting is not connected yet. Add the Twilio credentials and a sending number before
+                  starting this blast — Settings → Texting shows what is missing.
+                </p>
+              </div>
+            )}
+
+            {isSms && preview?.recipients === 0 && (
+              <div className="flex items-center gap-3 rounded-xl2 border border-warn/40 bg-warn/10 px-4 py-3">
+                <AlertTriangle className="h-5 w-5 shrink-0 text-warn" />
+                <p className="text-sm text-white">
+                  Nobody in this audience has both a phone number and texting consent, so this blast
+                  would reach no one. Mark who has agreed on the Customers page first.
+                </p>
+              </div>
+            )}
 
             {testMode && <Badge tone="amber">Test mode — only {testEmail} receives this</Badge>}
 
-            {preview?.html && (
+            {isSms && preview?.smsBody && (
+              <div className="rounded-xl2 border border-line bg-ink p-4">
+                <p className="text-xs text-muted">Every recipient gets:</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm text-white">{preview.smsBody}</p>
+              </div>
+            )}
+
+            {!isSms && preview?.html && (
               <div className="overflow-hidden rounded-xl2 border border-line bg-white">
                 <iframe title="Final preview" srcDoc={preview.html} className="h-[420px] w-full border-0" sandbox="" />
               </div>
@@ -386,16 +544,16 @@ export default function CampaignWizard() {
 
             <div className="flex flex-wrap items-center gap-3 border-t border-line pt-5">
               <Input
-                type="email"
+                type={isSms ? 'tel' : 'email'}
                 value={testEmail}
                 onChange={(e) => setTestEmail(e.target.value)}
-                placeholder="Send a test to…"
+                placeholder={isSms ? 'Send a test text to…' : 'Send a test to…'}
                 className="max-w-xs"
               />
               <Button onClick={sendTest}>Send test</Button>
               <div className="flex-1" />
               <Button variant="primary" size="lg" loading={saving} onClick={launch}>
-                Start campaign
+                {isSms ? 'Start text blast' : 'Start campaign'}
               </Button>
             </div>
           </div>
@@ -406,8 +564,8 @@ export default function CampaignWizard() {
         <Button onClick={() => (step === 0 ? navigate('/campaigns') : setStep((s) => s - 1))}>
           {step === 0 ? 'Cancel' : 'Back'}
         </Button>
-        {step < STEPS.length - 1 && (
-          <Button variant="primary" disabled={!canContinue} onClick={() => setStep((s) => s + 1)}>
+        {step < steps.length - 1 && (
+          <Button variant="primary" disabled={!canContinue[current]} onClick={() => setStep((s) => s + 1)}>
             Continue
           </Button>
         )}

@@ -62,6 +62,10 @@ flyers disappear on each deploy.
 | `RESEND_FROM_NAME` | Railway service variables | `HULK Automation` | Appears as the sender name in the test |
 | `RESEND_REPLY_TO` | Railway service variables | `service@hulkautomation.com` | Replies to a test land in that inbox |
 | `RESEND_WEBHOOK_SECRET` | Railway service variables | `whsec_…` from Resend (optional) | Open/bounce numbers appear in Analytics |
+| `TWILIO_ACCOUNT_SID` | Railway service variables | Twilio SID starting `AC` (text blasts only) | Integrations → Twilio → Test connection |
+| `TWILIO_AUTH_TOKEN` | Railway service variables | Twilio auth token | Integrations → Twilio → Test connection |
+| `TWILIO_FROM_NUMBER` | Railway service variables | The Twilio number texts are sent from, `+1…` | Settings → Texting shows it |
+| `SMS_NUMBER` | Railway service variables | Number the email's "Text us" button opens (defaults to `+12126879116`) | Tap the button in a test email |
 | `UPLOAD_DIR` | Already set in the Dockerfile | `/data/uploads` | A flyer survives a redeploy |
 
 Generate a session secret with: `openssl rand -base64 48`
@@ -268,11 +272,36 @@ railway.json                     builder, start command, health check
 ## Database tables
 
 `users`, `customers`, `campaigns`, `campaign_recipients`, `email_events`, `email_templates`,
-`unsubscribe_records`, `suppression_list`, `maintenance_leads`, `settings`, `audit_logs`,
-`notifications`, `daily_send_counts`, `sync_runs`, `schema_migrations`.
+`unsubscribe_records`, `suppression_list`, `sms_suppression_list`, `maintenance_leads`, `settings`,
+`audit_logs`, `notifications`, `daily_send_counts`, `sync_runs`, `schema_migrations`.
 
 PostgreSQL is the only source of truth. Campaign progress, the daily counter and recipient
 status are never held in memory alone.
+
+---
+
+## Text blasts
+
+A campaign is either an email or a text blast, chosen on the first step of the wizard. A blast
+sends a short message through Twilio, with its own daily limit counted separately from the email
+one, through the same queue, the same schedule and the same pause and resume controls.
+
+Texting has one rule the email side does not: **a customer is only ever texted if they are marked
+as having agreed to it.** The flag starts off for everybody. Mark people on the Customers page —
+individually while editing, or several at once with "Agreed to texts" — and only for customers who
+actually consented, on a signed work order, a form, or in writing. The Customers filter "Has a
+phone, no texting consent" shows who is still missing, and Integrations → Twilio shows how many
+people a blast could reach right now.
+
+Consent is checked when the audience is built, again when the message is about to be sent, and the
+opt-out line is added to every message that does not already carry one. A reply of STOP (or
+UNSUBSCRIBE, CANCEL, QUIT, END) removes the number immediately and switches the customer's consent
+off; START turns it back on. Point your Twilio number's messaging webhook at
+`https://your-app/webhooks/twilio/inbound` so those replies reach the app — carriers block the
+number either way, but without the webhook the app keeps thinking the person is reachable.
+
+Numbers are matched on their last ten digits, so `212 555 0101`, `(212) 555-0101` and
+`+12125550101` are all treated as the same line.
 
 ---
 
@@ -283,3 +312,9 @@ website, a one-click unsubscribe link and `List-Unsubscribe` headers. Unsubscrib
 are excluded at three separate points: when the audience is built, when a recipient is claimed
 for sending, and again immediately before the send call. Bounces and complaints are suppressed
 automatically. The daily limit is a hard stop, not a target.
+
+Marketing texts are held to a stricter standard than email: US law requires prior express written
+consent before one is sent, and the penalties are per message. That is why texting consent is a
+separate flag that defaults to off rather than something inferred from a customer being active, and
+why marking it in bulk asks for confirmation. Recording consent in this app is not the same as
+having obtained it — keep whatever evidences it, since that is what would be asked for.

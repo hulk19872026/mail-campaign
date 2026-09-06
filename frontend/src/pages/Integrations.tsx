@@ -41,7 +41,7 @@ export default function Integrations() {
     }
   };
 
-  const test = async (service: 'wave' | 'resend') => {
+  const test = async (service: 'wave' | 'resend' | 'twilio') => {
     setTesting(service);
     try {
       const result = await api.post<{
@@ -223,6 +223,50 @@ export default function Integrations() {
         </div>
         <p className="mt-3 text-xs text-muted">
           Your API key lives in Railway's environment variables and is never shown in the browser.
+        </p>
+      </Card>
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Twilio</h2>
+            <p className="mt-1 text-sm text-muted">Delivers your text blasts.</p>
+          </div>
+          <Badge tone={data.twilio?.configured ? 'green' : 'amber'}>
+            <StatusDot ok={!!data.twilio?.configured} warn />
+            {data.twilio?.configured ? 'Connected' : 'Needs setup'}
+          </Badge>
+        </div>
+
+        <dl className="mt-5 grid gap-4 sm:grid-cols-4">
+          <div>
+            <dt className="text-xs text-muted">Texts sent from</dt>
+            <dd className="mt-1 text-sm text-white">{data.twilio?.fromNumber || 'Not set'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted">Can be texted</dt>
+            <dd className="mt-1 text-xl font-bold text-white">{data.twilio?.consented ?? 0}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted">Texts sent today</dt>
+            <dd className="mt-1 text-xl font-bold text-white">{data.twilio?.sentToday ?? 0}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted">Remaining today</dt>
+            <dd className="mt-1 text-xl font-bold text-white">{data.twilio?.remaining ?? 0}</dd>
+          </div>
+        </dl>
+
+        <div className="mt-5">
+          <Button loading={testing === 'twilio'} onClick={() => test('twilio')}>
+            Test connection
+          </Button>
+        </div>
+        <p className="mt-3 text-xs text-muted">
+          Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in Railway, and point your Twilio number's
+          messaging webhook at {location.origin}/webhooks/twilio/inbound so STOP replies remove people
+          automatically. "Can be texted" counts customers with a number who have agreed to receive
+          texts — nobody else is ever included in a blast.
         </p>
       </Card>
     </div>

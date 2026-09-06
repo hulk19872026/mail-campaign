@@ -175,6 +175,36 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      <Card>
+        <SectionTitle
+          title="Texting"
+          subtitle="Your Twilio credentials stay in Railway and are never shown here."
+        />
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="Texts are sent from" hint="The Twilio number a text blast sends from.">
+            <Input
+              value={settings.sms_from_number ?? ''}
+              onChange={set('sms_from_number')}
+              placeholder="+1 212 687 9116"
+            />
+          </Field>
+          <Field label="Texts per day" hint="Counted separately from the email limit.">
+            <Input
+              type="number"
+              min={1}
+              max={500}
+              value={settings.sms_daily_limit ?? 99}
+              onChange={set('sms_daily_limit')}
+            />
+          </Field>
+        </div>
+        <p className="mt-4 text-xs text-muted">
+          Only customers marked as having agreed to receive texts are ever included in a blast, and a
+          reply of STOP removes them automatically. Consent is recorded per customer on the Customers
+          page.
+        </p>
+      </Card>
+
       <div className="flex justify-end">
         <Button variant="primary" size="lg" loading={saving} onClick={save}>
           Save changes

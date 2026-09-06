@@ -46,6 +46,19 @@ export function smsSegments(body: string): { characters: number; segments: numbe
   return { characters, segments, unicode };
 }
 
+/**
+ * SQL comparing two phone numbers on their last ten digits.
+ *
+ * Stored numbers are whatever was typed ("212 555 0101"); Twilio always reports
+ * E.164 ("+12125550101"). Comparing every digit makes those two different
+ * numbers, so matching is done on the ten that identify the line.
+ *
+ * The column name is interpolated, so only pass literals from this codebase.
+ */
+export function phoneKeySql(column: string): string {
+  return `right(regexp_replace(${column}, '[^0-9]', '', 'g'), 10)`;
+}
+
 export function twilioConfigured(): boolean {
   return Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN);
 }

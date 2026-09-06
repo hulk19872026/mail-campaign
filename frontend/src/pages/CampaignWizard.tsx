@@ -73,7 +73,13 @@ export default function CampaignWizard() {
       const result = await api.upload<{ path: string; name: string; kind: string }>('/api/uploads', file);
       setFlyer(result);
       if (!blocks.some((b) => b.type === 'flyer')) {
-        setBlocks((list) => [...list, { id: Math.random().toString(36).slice(2, 9), type: 'flyer' }]);
+        // The flyer leads the email, so it goes in just below the logo.
+        setBlocks((list) => {
+          const at = list.findIndex((b) => b.type !== 'logo');
+          const block = { id: Math.random().toString(36).slice(2, 9), type: 'flyer' as const };
+          const index = at < 0 ? list.length : at;
+          return [...list.slice(0, index), block, ...list.slice(index)];
+        });
       }
       toast.push('success', 'Flyer uploaded.');
     } catch (err) {

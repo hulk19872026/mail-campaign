@@ -219,12 +219,29 @@ function renderBlock(block: Block, ctx: RenderContext): string {
   }
 }
 
+/**
+ * Puts the flyer ahead of the written content so it is the first thing the
+ * recipient sees, with the information following underneath. Any leading logo
+ * stays above it so the email still identifies the sender at a glance.
+ */
+export function orderBlocks(blocks: Block[]): Block[] {
+  const list = (blocks || []).filter(Boolean);
+  const flyerAt = list.findIndex((b) => b.type === 'flyer');
+  if (flyerAt < 0) return list;
+  const flyer = list[flyerAt];
+  const rest = list.filter((_, i) => i !== flyerAt);
+  let at = 0;
+  while (at < rest.length && rest[at].type === 'logo') at += 1;
+  return [...rest.slice(0, at), flyer, ...rest.slice(at)];
+}
+
 export function renderEmail(
   blocks: Block[],
   ctx: RenderContext
 ): { html: string; text: string } {
   const s = ctx.settings;
-  const body = (blocks || []).map((b) => renderBlock(b, ctx)).join('');
+  const ordered = orderBlocks(blocks);
+  const body = ordered.map((b) => renderBlock(b, ctx)).join('');
   const unsub = unsubscribeUrl(ctx);
   const address = s.mailing_address
     ? `${escapeHtml(s.mailing_address)}<br />`
@@ -261,14 +278,16 @@ export function renderEmail(
 ${openPixel(ctx)}
 </body></html>`;
 
-  const text = plainText(blocks, ctx, unsub);
+  const text = plainText(ordered, ctx, unsub);
   return { html, text };
 }
 
 function plainText(blocks: Block[], ctx: RenderContext, unsub: string): string {
   const lines: string[] = [];
   for (const b of blocks || []) {
-    if (b.type === 'headline') lines.push(personalize(b.text, ctx), '');
+    if (b.type === 'flyer') {
+      if (ctx.flyerUrl) lines.push(b.caption ? personalize(b.caption, ctx) : 'Flyer', ctx.flyerUrl, '');
+    } else if (b.type === 'headline') lines.push(personalize(b.text, ctx), '');
     else if (b.type === 'paragraph') lines.push(personalize(b.text, ctx), '');
     else if (b.type === 'button') lines.push(`${personalize(b.label, ctx)}: ${b.url}`, '');
     else if (b.type === 'plans')

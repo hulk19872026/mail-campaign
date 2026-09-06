@@ -32,7 +32,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   website: 'https://hulkautomation.com',
   mailing_address: '',
   support_phone: '',
-  sms_number: '',
+  sms_number: env.SMS_NUMBER,
   timezone: 'America/New_York',
   daily_limit: 99,
   batch_size: 10,

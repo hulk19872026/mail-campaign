@@ -54,6 +54,12 @@ export const env = {
   RESEND_FROM_NAME: process.env.RESEND_FROM_NAME ?? 'HULK Automation',
   RESEND_REPLY_TO: process.env.RESEND_REPLY_TO ?? '',
   RESEND_WEBHOOK_SECRET: process.env.RESEND_WEBHOOK_SECRET ?? '',
+
+  TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID ?? '',
+  TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN ?? '',
+  TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER ?? '',
+  /** The number the email's "Text us" button opens, when Settings has none. */
+  SMS_NUMBER: process.env.SMS_NUMBER ?? '+12126879116',
 };
 
 export const isProd = env.NODE_ENV === 'production';

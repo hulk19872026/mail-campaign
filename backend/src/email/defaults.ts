@@ -30,6 +30,11 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
         url: 'https://hulkautomation.com',
         interest: 'Maintenance plan',
       }),
+      b('textus', {
+        type: 'textus',
+        label: 'Text us',
+        message: 'Hi HULK Automation, I would like to hear about the maintenance plans.',
+      }),
       b('close', {
         type: 'paragraph',
         text: 'Reply to this email if you would rather talk it through — we will call you back the same day.',
@@ -56,6 +61,11 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
         url: 'https://hulkautomation.com',
         interest: 'Inspection',
       }),
+      b('textus', {
+        type: 'textus',
+        label: 'Text us',
+        message: 'Hi HULK Automation, I would like to book an inspection.',
+      }),
     ],
   },
   {
@@ -75,6 +85,11 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
         label: 'Request service',
         url: 'https://hulkautomation.com',
         interest: 'Service request',
+      }),
+      b('textus', {
+        type: 'textus',
+        label: 'Text us',
+        message: 'Hi HULK Automation, I need a hand with my system.',
       }),
       b('divider', { type: 'divider' }),
       b('plans', { type: 'plans', plans: ['pro'] }),

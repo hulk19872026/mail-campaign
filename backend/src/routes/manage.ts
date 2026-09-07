@@ -11,6 +11,7 @@ import { audit } from '../services/activity';
 import { getSettings, saveSettings } from '../services/settings';
 import { lastSync, resolveBusinessId, syncWaveCustomers, testWaveConnection } from '../services/wave';
 import { listResendDomains, testResendConnection } from '../services/resend';
+import { testTwilioConnection, twilioConfigured } from '../services/twilio';
 import { schedulerState } from '../services/scheduler';
 import { sentToday } from '../services/campaigns';
 import { renderEmail } from '../email/render';
@@ -171,6 +172,23 @@ manageRouter.get(
         remaining: Math.max(0, settings.daily_limit - (await sentToday(settings))),
         dailyLimit: settings.daily_limit,
       },
+      twilio: {
+        configured: twilioConfigured(),
+        fromNumber: settings.sms_from_number,
+        textUsNumber: settings.sms_number,
+        sentToday: await sentToday(settings, 'sms'),
+        remaining: Math.max(0, settings.sms_daily_limit - (await sentToday(settings, 'sms'))),
+        dailyLimit: settings.sms_daily_limit,
+        // How many customers a blast could actually reach right now.
+        consented: Number(
+          (
+            await one<{ count: string }>(
+              `SELECT count(*)::text AS count FROM customers
+                WHERE sms_opt_in = true AND phone <> '' AND status = 'active' AND marketing_opt_out = false`
+            )
+          )?.count ?? 0
+        ),
+      },
     });
   })
 );
@@ -186,6 +204,13 @@ manageRouter.post(
   '/integrations/wave/sync',
   handler(async (req, res) => {
     res.json(await syncWaveCustomers(actorOf(req)));
+  })
+);
+
+manageRouter.post(
+  '/integrations/twilio/test',
+  handler(async (_req, res) => {
+    res.json(await testTwilioConnection());
   })
 );
 

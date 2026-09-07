@@ -12,6 +12,8 @@ export type Block = {
   alt?: string;
   caption?: string;
   interest?: string;
+  message?: string;
+  number?: string;
   height?: number;
   plans?: string[];
 };
@@ -43,6 +45,16 @@ const BLOCK_LIBRARY: { type: string; label: string; make: () => Block }[] = [
       label: 'Schedule your maintenance',
       url: 'https://hulkautomation.com',
       interest: 'Maintenance plan',
+    }),
+  },
+  {
+    type: 'textus',
+    label: 'Text us button',
+    make: () => ({
+      id: rid(),
+      type: 'textus',
+      label: 'Text us',
+      message: 'Hi HULK Automation, I would like to ask about ',
     }),
   },
   {
@@ -169,6 +181,31 @@ export default function EmailEditor({
                   <Input
                     value={block.interest ?? ''}
                     onChange={(e) => update(block.id, { interest: e.target.value })}
+                  />
+                </Field>
+              </div>
+            )}
+
+            {block.type === 'textus' && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Button text">
+                  <Input value={block.label ?? ''} onChange={(e) => update(block.id, { label: e.target.value })} />
+                </Field>
+                <Field label="Number" hint="Leave empty to use the texting number from Settings.">
+                  <Input
+                    value={block.number ?? ''}
+                    onChange={(e) => update(block.id, { number: e.target.value })}
+                    placeholder="+1 732 555 0142"
+                  />
+                </Field>
+                <Field
+                  label="Message they start with"
+                  hint="Pre-fills their text app. Taps open the phone directly, so these are not counted as clicks."
+                  className="sm:col-span-2"
+                >
+                  <Input
+                    value={block.message ?? ''}
+                    onChange={(e) => update(block.id, { message: e.target.value })}
                   />
                 </Field>
               </div>

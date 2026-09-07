@@ -13,6 +13,7 @@ import {
   Modal,
   Select,
   Spinner,
+  Toggle,
   useToast,
 } from '../components/ui';
 
@@ -26,7 +27,9 @@ type Customer = {
   address: string;
   status: string;
   marketing_opt_out: boolean;
+  sms_opt_in: boolean;
   last_emailed_at: string | null;
+  last_texted_at: string | null;
   wave_customer_id: string | null;
   campaigns_sent: string;
 };
@@ -69,6 +72,17 @@ export default function Customers() {
 
   const bulk = async (action: string) => {
     if (action === 'delete' && !confirm(`Delete ${selected.length} customers? This cannot be undone.`)) return;
+    // Recording consent is a claim that these people actually agreed. Worth one
+    // deliberate confirmation, because it is what makes them textable.
+    if (
+      action === 'sms_opt_in' &&
+      !confirm(
+        `Mark ${selected.length} customers as having agreed to receive texts?\n\n` +
+          'Only do this for customers who actually gave consent — on a signed work order, a form, ' +
+          'or in writing. They become reachable by every text blast.'
+      )
+    )
+      return;
     try {
       await api.post('/api/customers/bulk', { ids: selected, action });
       toast.push('success', `${selected.length} customers updated.`);
@@ -154,6 +168,8 @@ export default function Customers() {
             <option value="active">Active</option>
             <option value="disabled">Disabled</option>
             <option value="unsubscribed">Unsubscribed</option>
+            <option value="sms_ready">Can be texted</option>
+            <option value="sms_missing">Has a phone, no texting consent</option>
           </Select>
           <Select value={sort} onChange={(e) => setSort(e.target.value)} className="w-auto">
             <option value="name">Sort by name</option>
@@ -174,6 +190,12 @@ export default function Customers() {
             </Button>
             <Button size="sm" onClick={() => bulk('unsubscribe')}>
               Mark unsubscribed
+            </Button>
+            <Button size="sm" onClick={() => bulk('sms_opt_in')}>
+              Agreed to texts
+            </Button>
+            <Button size="sm" onClick={() => bulk('sms_opt_out')}>
+              No texts
             </Button>
             <Button size="sm" variant="danger" onClick={() => bulk('delete')}>
               Delete
@@ -289,6 +311,7 @@ export default function Customers() {
                     ) : (
                       <Badge tone={c.status === 'active' ? 'green' : 'grey'}>{c.status}</Badge>
                     )}
+                    {c.sms_opt_in && c.phone && <Badge tone="blue">Texts OK</Badge>}
                   </div>
                   <p className="mt-2 text-sm text-soft">{c.email}</p>
                   <p className="text-xs text-muted">
@@ -472,6 +495,17 @@ function CustomerForm({
             <option value="active">Active</option>
             <option value="disabled">Disabled</option>
           </Select>
+        </Field>
+        <Field
+          label="Texting"
+          hint="Only turn this on for customers who agreed to receive texts."
+          className="sm:col-span-2"
+        >
+          <Toggle
+            checked={!!form.sms_opt_in}
+            onChange={(v) => setForm((f: any) => ({ ...f, sms_opt_in: v }))}
+            label="Agreed to receive text messages"
+          />
         </Field>
         <Field label="Address" className="sm:col-span-2">
           <Input value={form.address ?? ''} onChange={set('address')} />

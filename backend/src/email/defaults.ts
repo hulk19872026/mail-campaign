@@ -30,6 +30,11 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
         url: 'https://hulkautomation.com',
         interest: 'Maintenance plan',
       }),
+      b('textus', {
+        type: 'textus',
+        label: 'Text us',
+        message: 'Hi HULK Automation, I would like to hear about the maintenance plans.',
+      }),
       b('close', {
         type: 'paragraph',
         text: 'Reply to this email if you would rather talk it through — we will call you back the same day.',
@@ -42,6 +47,7 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
     subject: 'A quick check-up for your cameras and alarm',
     blocks: [
       b('logo', { type: 'logo' }),
+      b('flyer', { type: 'flyer', caption: 'This month\u2019s maintenance flyer' }),
       b('headline', { type: 'headline', text: 'When did your cameras last get looked at?' }),
       b('intro', {
         type: 'paragraph',
@@ -49,12 +55,16 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
           'Hi {{first_name}},\n\nDust, weather and firmware drift take a quiet toll on camera, alarm and access control equipment. A short inspection now is far cheaper than an emergency call later.',
       }),
       b('services', { type: 'services' }),
-      b('flyer', { type: 'flyer', caption: 'This month\u2019s maintenance flyer' }),
       b('cta', {
         type: 'button',
         label: 'Book an inspection',
         url: 'https://hulkautomation.com',
         interest: 'Inspection',
+      }),
+      b('textus', {
+        type: 'textus',
+        label: 'Text us',
+        message: 'Hi HULK Automation, I would like to book an inspection.',
       }),
     ],
   },
@@ -75,6 +85,11 @@ export const SEED_TEMPLATES: SeedTemplate[] = [
         label: 'Request service',
         url: 'https://hulkautomation.com',
         interest: 'Service request',
+      }),
+      b('textus', {
+        type: 'textus',
+        label: 'Text us',
+        message: 'Hi HULK Automation, I need a hand with my system.',
       }),
       b('divider', { type: 'divider' }),
       b('plans', { type: 'plans', plans: ['pro'] }),

@@ -101,6 +101,12 @@ export default function SettingsPage() {
           <Field label="Phone shown in emails">
             <Input value={settings.support_phone} onChange={set('support_phone')} />
           </Field>
+          <Field
+            label="Texting number"
+            hint="The number the &ldquo;Text us&rdquo; button opens. Leave empty to use the phone above."
+          >
+            <Input value={settings.sms_number ?? ''} onChange={set('sms_number')} placeholder="+1 732 555 0142" />
+          </Field>
           <Field label="Timezone">
             <Select value={settings.timezone} onChange={set('timezone')}>
               {TIMEZONES.map((tz) => (
@@ -167,6 +173,49 @@ export default function SettingsPage() {
             <Input type="color" value={settings.accent_color} onChange={set('accent_color')} className="h-11 p-1" />
           </Field>
         </div>
+      </Card>
+
+      <Card>
+        <SectionTitle
+          title="Texting"
+          subtitle="Your Twilio credentials stay in Railway and are never shown here."
+        />
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="Texts are sent from" hint="The Twilio number a text blast sends from.">
+            <Input
+              value={settings.sms_from_number ?? ''}
+              onChange={set('sms_from_number')}
+              placeholder="+1 212 687 9116"
+            />
+          </Field>
+          <Field label="Texts per day" hint="Counted separately from the email limit.">
+            <Input
+              type="number"
+              min={1}
+              max={500}
+              value={settings.sms_daily_limit ?? 99}
+              onChange={set('sms_daily_limit')}
+            />
+          </Field>
+        </div>
+        <div className="mt-4 rounded-xl2 border border-line bg-ink p-4">
+          <Toggle
+            checked={settings.sms_button_auto !== false}
+            onChange={(v: boolean) => setSettings((s: any) => ({ ...s, sms_button_auto: v }))}
+            label={'Put a "Text us" button in every email'}
+          />
+          <p className="mt-2 text-xs text-muted">
+            Emails built before this button existed have no block for it, so it is added next to the
+            main button when it is sent. Emails where you placed the button yourself keep it where you
+            put it.
+          </p>
+        </div>
+
+        <p className="mt-4 text-xs text-muted">
+          Only customers marked as having agreed to receive texts are ever included in a blast, and a
+          reply of STOP removes them automatically. Consent is recorded per customer on the Customers
+          page.
+        </p>
       </Card>
 
       <div className="flex justify-end">

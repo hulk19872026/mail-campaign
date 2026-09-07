@@ -1,10 +1,13 @@
 import { Router } from 'express';
 import { databaseTarget, one, query } from '../lib/db';
+import { env } from '../lib/env';
 import { verifyToken } from '../lib/tokens';
 import { handler } from '../lib/http';
 import { log } from '../lib/logger';
 import { getSettings } from '../services/settings';
 import { verifyResendWebhook } from '../services/resend';
+import { normalizePhone, phoneKeySql, verifyTwilioWebhook } from '../services/twilio';
+import { suppressNumber } from '../services/campaigns';
 import { audit, notify } from '../services/activity';
 import { escapeHtml } from '../email/render';
 
@@ -224,6 +227,122 @@ publicRouter.post(
         );
       }
       log.warn('Address suppressed after provider event', { type, messageId });
+    }
+  })
+);
+
+/* ---------------------------- twilio webhooks ---------------------------- */
+
+/** The public URL Twilio signed its request against. */
+function calledUrl(req: any): string {
+  return `${env.APP_URL}${req.originalUrl}`;
+}
+
+/**
+ * Inbound texts. Carriers handle STOP on most numbers, but the reply still has
+ * to reach us or the customer stays on the list and gets texted again.
+ */
+publicRouter.post(
+  '/webhooks/twilio/inbound',
+  handler(async (req, res) => {
+    const body = req.body ?? {};
+    if (!verifyTwilioWebhook(String(req.headers['x-twilio-signature'] ?? ''), calledUrl(req), body)) {
+      res.status(401).type('text/xml').send('<Response/>');
+      return;
+    }
+    res.type('text/xml').send('<Response/>');
+
+    const from = normalizePhone(String(body.From ?? ''));
+    const text = String(body.Body ?? '').trim().toUpperCase();
+    if (!from) return;
+
+    // The keywords the carriers recognise, matched the same way here.
+    const stop = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT', 'REVOKE', 'OPTOUT'];
+    const start = ['START', 'YES', 'UNSTOP'];
+
+    const customer = await one<any>(
+      `SELECT id, email FROM customers WHERE ${phoneKeySql('phone')} = ${phoneKeySql('$1')} LIMIT 1`,
+      [from]
+    );
+
+    if (stop.includes(text)) {
+      await suppressNumber(from, customer?.id ?? null, 'stop');
+      await audit('sms.opted_out', { actor: from, entity: 'customer', entityId: customer?.id ?? '' });
+      await notify('warning', 'Customer opted out of texts', from);
+      log.info('SMS opt-out recorded', { from });
+      return;
+    }
+
+    if (start.includes(text) && customer?.id) {
+      await query(
+        `DELETE FROM sms_suppression_list WHERE ${phoneKeySql('phone')} = ${phoneKeySql('$1')}`,
+        [from]
+      );
+      await query(
+        `UPDATE customers SET sms_opt_in = true, sms_opt_in_at = now(), sms_opt_out_at = NULL WHERE id = $1`,
+        [customer.id]
+      );
+      await audit('sms.opted_in', { actor: from, entity: 'customer', entityId: customer.id });
+      return;
+    }
+
+    // Anything else is a person replying to a blast, which is a lead worth
+    // seeing rather than something to drop on the floor.
+    await notify('info', 'Reply to a text blast', `${from}: ${String(body.Body ?? '').slice(0, 200)}`);
+  })
+);
+
+/** Delivery receipts for sent texts. */
+publicRouter.post(
+  '/webhooks/twilio/status',
+  handler(async (req, res) => {
+    const body = req.body ?? {};
+    if (!verifyTwilioWebhook(String(req.headers['x-twilio-signature'] ?? ''), calledUrl(req), body)) {
+      res.status(401).type('text/xml').send('<Response/>');
+      return;
+    }
+    res.type('text/xml').send('<Response/>');
+
+    const sid = String(body.MessageSid ?? body.SmsSid ?? '');
+    const status = String(body.MessageStatus ?? body.SmsStatus ?? '');
+    if (!sid || !status) return;
+
+    const recipient = await one<any>(
+      `SELECT id, campaign_id, customer_id, phone FROM campaign_recipients WHERE provider_message_id = $1`,
+      [sid]
+    );
+    if (!recipient) return;
+
+    if (status === 'delivered') {
+      await query(
+        `UPDATE campaign_recipients SET delivered_at = COALESCE(delivered_at, now()) WHERE id = $1`,
+        [recipient.id]
+      );
+      await query(
+        `INSERT INTO email_events (campaign_id, customer_id, recipient_id, type, metadata)
+         VALUES ($1,$2,$3,'delivered',$4)`,
+        [recipient.campaign_id, recipient.customer_id, recipient.id, JSON.stringify({ channel: 'sms' })]
+      );
+      return;
+    }
+
+    if (status === 'failed' || status === 'undelivered') {
+      const code = String(body.ErrorCode ?? '');
+      await query(
+        `UPDATE campaign_recipients SET status='failed', bounced_at = COALESCE(bounced_at, now()),
+                error_message = $2 WHERE id = $1`,
+        [recipient.id, `Twilio ${status}${code ? ` (${code})` : ''}`]
+      );
+      await query(
+        `INSERT INTO email_events (campaign_id, customer_id, recipient_id, type, metadata)
+         VALUES ($1,$2,$3,'bounced',$4)`,
+        [recipient.campaign_id, recipient.customer_id, recipient.id, JSON.stringify({ channel: 'sms', code })]
+      );
+      // 21610 is "has replied STOP", 30003/30005 an unreachable or non-existent
+      // handset. None of those get better by texting the number again.
+      if (['21610', '30003', '30005', '30006'].includes(code)) {
+        await suppressNumber(recipient.phone, recipient.customer_id, `twilio_${code}`);
+      }
     }
   })
 );

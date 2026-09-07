@@ -110,6 +110,18 @@ export function smsHref(number: string, message?: string): string {
   return message ? `sms:${dialable}?&body=${encodeURIComponent(message)}` : `sms:${dialable}`;
 }
 
+/**
+ * The number as a person reads it: (212) 687-9116 rather than +12126879116.
+ * Only North American numbers are reshaped; anything else is shown as typed,
+ * since guessing at another country's grouping would read worse, not better.
+ */
+export function formatPhone(number: string): string {
+  const digits = String(number ?? '').replace(/[^0-9]/g, '');
+  const local = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  if (local.length !== 10) return String(number ?? '').trim();
+  return `(${local.slice(0, 3)}) ${local.slice(3, 6)}-${local.slice(6)}`;
+}
+
 /** The number a "Text us" block dials: its own, else the one in Settings. */
 function textNumber(block: { number?: string }, ctx: RenderContext): string {
   return block.number?.trim() || ctx.settings.sms_number || ctx.settings.support_phone || '';
@@ -144,8 +156,78 @@ function openPixel(ctx: RenderContext): string {
   return `<img src="${env.APP_URL}/t/open/${token}.gif" width="1" height="1" alt="" style="display:block;border:0;" />`;
 }
 
-function renderBlock(block: Block, ctx: RenderContext): string {
+/** The primary call to action, in the accent colour. */
+function buttonAnchor(block: Extract<Block, { type: 'button' }>, ctx: RenderContext): string {
   const accent = ctx.settings.accent_color || '#22C55E';
+  return `<a href="${escapeHtml(
+    trackedUrl(block.url || ctx.settings.website, ctx, block.interest || block.label)
+  )}" style="display:inline-block;padding:15px 26px;border-radius:10px;background:${escapeHtml(
+    accent
+  )};color:#0b0f14;font:700 16px/1 Helvetica,Arial,sans-serif;text-decoration:none;">${escapeHtml(
+    personalize(block.label, ctx)
+  )}</a>`;
+}
+
+/** The "Text us" button, or null when no number is configured to text. */
+function textUsAnchor(block: Extract<Block, { type: 'textus' }>, ctx: RenderContext): string | null {
+  const href = smsHref(textNumber(block, ctx), personalize(block.message || '', ctx));
+  if (!href) return null;
+  return `<a href="${escapeHtml(
+    href
+  )}" style="display:inline-block;padding:15px 26px;border-radius:10px;background:#0f1115;color:#ffffff;font:700 16px/1 Helvetica,Arial,sans-serif;text-decoration:none;">${escapeHtml(
+    personalize(block.label || 'Text us', ctx)
+  )}</a>`;
+}
+
+/** Desktop mail cannot open an sms: link, so the number is also shown as text. */
+function textUsHint(block: Extract<Block, { type: 'textus' }>, ctx: RenderContext): string {
+  return `<div style="margin-top:8px;font:400 13px/1.5 Helvetica,Arial,sans-serif;color:#6b7280;">Or text us at ${escapeHtml(
+    formatPhone(textNumber(block, ctx))
+  )}</div>`;
+}
+
+/**
+ * A call to action and a "Text us" button side by side, in one row.
+ *
+ * Two blocks each render their own table row, which can only stack. Sitting
+ * them in two cells of a single table puts them next to each other in every
+ * mail client — floats and flexbox are not reliable in email, but table cells
+ * are. Returns null when there is no number, so the call to action is left to
+ * render on its own rather than in a one-sided pair.
+ */
+function renderButtonPair(
+  button: Extract<Block, { type: 'button' }>,
+  textus: Extract<Block, { type: 'textus' }>,
+  ctx: RenderContext
+): string | null {
+  const anchor = textUsAnchor(textus, ctx);
+  if (!anchor) return null;
+  return `<tr><td style="padding:18px 32px 22px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding-right:10px;">${buttonAnchor(
+    button,
+    ctx
+  )}</td><td>${anchor}</td></tr></table>${textUsHint(textus, ctx)}</td></tr>`;
+}
+
+/** Renders every block, pairing a call to action with a "Text us" that follows it. */
+function renderBlocks(blocks: Block[], ctx: RenderContext): string {
+  const out: string[] = [];
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i];
+    const next = blocks[i + 1];
+    if (block.type === 'button' && next?.type === 'textus') {
+      const pair = renderButtonPair(block, next, ctx);
+      if (pair) {
+        out.push(pair);
+        i += 1; // the "Text us" block was rendered as part of the pair
+        continue;
+      }
+    }
+    out.push(renderBlock(block, ctx));
+  }
+  return out.join('');
+}
+
+function renderBlock(block: Block, ctx: RenderContext): string {
   switch (block.type) {
     case 'logo': {
       const src = block.url || ctx.settings.logo_url;
@@ -202,26 +284,13 @@ function renderBlock(block: Block, ctx: RenderContext): string {
       )}" alt="Flyer" style="width:100%;max-width:536px;height:auto;display:block;border:0;border-radius:10px;" /></a>${caption}</td></tr>`;
     }
     case 'button':
-      return `<tr><td style="padding:18px 32px 22px;"><a href="${escapeHtml(
-        trackedUrl(block.url || ctx.settings.website, ctx, block.interest || block.label)
-      )}" style="display:inline-block;padding:15px 26px;border-radius:10px;background:${escapeHtml(
-        accent
-      )};color:#0b0f14;font:700 16px/1 Helvetica,Arial,sans-serif;text-decoration:none;">${escapeHtml(
-        personalize(block.label, ctx)
-      )}</a></td></tr>`;
+      return `<tr><td style="padding:18px 32px 22px;">${buttonAnchor(block, ctx)}</td></tr>`;
     case 'textus': {
-      const href = smsHref(textNumber(block, ctx), personalize(block.message || '', ctx));
+      const anchor = textUsAnchor(block, ctx);
       // With no number configured there is nothing to tap, so show nothing
       // rather than a dead button.
-      if (!href) return '';
-      const label = personalize(block.label || 'Text us', ctx);
-      return `<tr><td style="padding:6px 32px 18px;"><a href="${escapeHtml(
-        href
-      )}" style="display:inline-block;padding:15px 26px;border-radius:10px;background:#0f1115;color:#ffffff;font:700 16px/1 Helvetica,Arial,sans-serif;text-decoration:none;">${escapeHtml(
-        label
-      )}</a><div style="margin-top:8px;font:400 13px/1.5 Helvetica,Arial,sans-serif;color:#6b7280;">Or text us at ${escapeHtml(
-        textNumber(block, ctx)
-      )}</div></td></tr>`;
+      if (!anchor) return '';
+      return `<tr><td style="padding:6px 32px 18px;">${anchor}${textUsHint(block, ctx)}</td></tr>`;
     }
     case 'divider':
       return `<tr><td style="padding:8px 32px;"><div style="height:1px;background:#e5e7eb;"></div></td></tr>`;
@@ -306,7 +375,7 @@ export function renderEmail(
 ): { html: string; text: string } {
   const s = ctx.settings;
   const ordered = ensureTextUs(orderBlocks(blocks), ctx);
-  const body = ordered.map((b) => renderBlock(b, ctx)).join('');
+  const body = renderBlocks(ordered, ctx);
   const unsub = unsubscribeUrl(ctx);
   const address = s.mailing_address
     ? `${escapeHtml(s.mailing_address)}<br />`
@@ -357,7 +426,7 @@ function plainText(blocks: Block[], ctx: RenderContext, unsub: string): string {
     else if (b.type === 'button') lines.push(`${personalize(b.label, ctx)}: ${b.url}`, '');
     else if (b.type === 'textus') {
       const number = b.number?.trim() || ctx.settings.sms_number || ctx.settings.support_phone || '';
-      if (number) lines.push(`${personalize(b.label || 'Text us', ctx)}: ${number}`, '');
+      if (number) lines.push(`${personalize(b.label || 'Text us', ctx)}: ${formatPhone(number)}`, '');
     }
     else if (b.type === 'plans')
       for (const key of b.plans?.length ? b.plans : (['basic', 'pro', 'elite'] as const)) {

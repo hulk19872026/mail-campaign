@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Check, Upload } from 'lucide-react';
 import { api, errorText } from '../lib/api';
 import { formatNumber } from '../lib/format';
 import EmailEditor, { Block } from '../components/EmailEditor';
 import { Badge, Button, Card, Field, HelpTip, Input, Radio, Select, Textarea, Toggle, useToast } from '../components/ui';
+import type { Group } from './Groups';
 
 // Steps are keyed rather than numbered: a text blast skips the template, flyer,
 // subject and email builder, so position alone cannot say which screen is which.
@@ -51,6 +52,8 @@ export default function CampaignWizard() {
   const [name, setName] = useState('');
   const [audience, setAudience] = useState('active');
   const [audienceDays, setAudienceDays] = useState(90);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [groupId, setGroupId] = useState<number | null>(null);
   const [templateId, setTemplateId] = useState<number | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [subject, setSubject] = useState('');
@@ -65,6 +68,7 @@ export default function CampaignWizard() {
   const fileInput = useRef<HTMLInputElement>(null);
   const toast = useToast();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
 
   const isSms = channel === 'sms';
   const steps: readonly StepKey[] = isSms ? SMS_STEPS : EMAIL_STEPS;
@@ -77,12 +81,29 @@ export default function CampaignWizard() {
       .catch(() => undefined);
   }, []);
 
+  // Arriving from "Email this group" on the Groups page starts the wizard with
+  // that group already chosen.
+  useEffect(() => {
+    const wanted = parseInt(params.get('group') ?? '', 10);
+    api
+      .get<{ groups: Group[] }>('/api/groups')
+      .then((data) => {
+        setGroups(data.groups);
+        if (data.groups.some((g) => g.id === wanted)) {
+          setGroupId(wanted);
+          setAudience('group');
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+
   useEffect(() => {
     if (current !== 'review') return;
     api
       .post('/api/campaigns/preview', {
         audience,
         audience_days: audienceDays,
+        audience_group_id: groupId,
         test_mode: testMode,
         blocks,
         subject,
@@ -129,6 +150,7 @@ export default function CampaignWizard() {
         blocks,
         audience,
         audience_days: audienceDays,
+        audience_group_id: groupId,
         test_mode: testMode,
         test_email: testEmail || null,
         start_date: startChoice === 'date' ? startDate : null,
@@ -163,6 +185,7 @@ export default function CampaignWizard() {
         blocks,
         audience,
         audience_days: audienceDays,
+        audience_group_id: groupId,
         channel,
         sms_body: smsBody,
         flyer_path: flyer?.path ?? null,
@@ -176,9 +199,20 @@ export default function CampaignWizard() {
     }
   };
 
+  const audienceLabel =
+    audience === 'group'
+      ? groups.find((g) => g.id === groupId)?.name ?? 'A group'
+      : audience === 'all'
+      ? 'All customers'
+      : audience === 'never_emailed'
+      ? 'Customers who have never received a campaign'
+      : audience === 'not_in_days'
+      ? `Customers not emailed in ${audienceDays} days`
+      : 'Active customers';
+
   const canContinue: Record<StepKey, boolean> = {
     name: name.trim().length > 0,
-    customers: true,
+    customers: audience !== 'group' || groupId !== null,
     template: blocks.length > 0,
     flyer: true,
     subject: subject.trim().length > 0,
@@ -274,6 +308,43 @@ export default function CampaignWizard() {
                 agreed to receive texts. Everyone else is skipped, however you choose here.
               </div>
             )}
+            <Radio
+              checked={audience === 'group'}
+              onChange={() => setAudience('group')}
+              label="A group"
+              description={
+                groups.length
+                  ? 'One of the groups you have put together on the Groups page.'
+                  : 'You have not made any groups yet — build one on the Groups page first.'
+              }
+            />
+            {audience === 'group' &&
+              (groups.length ? (
+                <Field label="Which group?" className="max-w-sm">
+                  <Select
+                    value={groupId ?? ''}
+                    onChange={(e) => setGroupId(e.target.value ? parseInt(e.target.value, 10) : null)}
+                  >
+                    <option value="">Choose a group…</option>
+                    {groups.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.name} —{' '}
+                        {isSms
+                          ? `${formatNumber(group.member_count)} in this group`
+                          : `${formatNumber(group.emailable_count)} can be emailed`}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              ) : (
+                <div className="rounded-xl2 border border-line bg-ink px-4 py-3 text-sm text-muted">
+                  Groups are lists you pick by hand. Open{' '}
+                  <Link to="/groups" className="text-accent underline">
+                    Groups
+                  </Link>{' '}
+                  to make one, add people to it from the Customers page, then come back here.
+                </div>
+              ))}
             <Radio
               checked={audience === 'all'}
               onChange={() => setAudience('all')}
@@ -479,6 +550,7 @@ export default function CampaignWizard() {
             </h2>
             <dl className="grid gap-4 sm:grid-cols-2">
               <Summary label="Campaign" value={name} />
+              <Summary label="Sending to" value={audienceLabel} />
               <Summary
                 label="Recipients"
                 value={formatNumber(preview?.recipients ?? 0)}

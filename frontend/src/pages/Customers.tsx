@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, Plus, Search, Upload, Users } from 'lucide-react';
+import { Download, Plus, Search, Upload, Users, UsersRound } from 'lucide-react';
 import { api, errorText } from '../lib/api';
+import type { Group } from './Groups';
 import { formatDate, formatNumber, fullName } from '../lib/format';
 import {
   Badge,
@@ -32,6 +33,7 @@ type Customer = {
   last_texted_at: string | null;
   wave_customer_id: string | null;
   campaigns_sent: string;
+  groups: { id: number; name: string }[];
 };
 
 export default function Customers() {
@@ -41,6 +43,9 @@ export default function Customers() {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
   const [sort, setSort] = useState('name');
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [groupFilter, setGroupFilter] = useState('');
+  const [grouping, setGrouping] = useState<'add' | 'remove' | null>(null);
   const [selected, setSelected] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -55,7 +60,8 @@ export default function Customers() {
     setError('');
     api
       .get<{ customers: Customer[]; total: number }>(
-        `/api/customers?search=${encodeURIComponent(search)}&status=${status}&sort=${sort}&page=${page}`
+        `/api/customers?search=${encodeURIComponent(search)}&status=${status}&sort=${sort}` +
+          `&group=${groupFilter}&page=${page}`
       )
       .then((data) => {
         setCustomers(data.customers);
@@ -68,7 +74,17 @@ export default function Customers() {
   useEffect(() => {
     const timer = setTimeout(load, search ? 300 : 0);
     return () => clearTimeout(timer);
-  }, [search, status, sort, page]);
+  }, [search, status, sort, groupFilter, page]);
+
+  const loadGroups = () =>
+    api
+      .get<{ groups: Group[] }>('/api/groups')
+      .then((data) => setGroups(data.groups))
+      .catch(() => undefined);
+
+  useEffect(() => {
+    loadGroups();
+  }, []);
 
   const bulk = async (action: string) => {
     if (action === 'delete' && !confirm(`Delete ${selected.length} customers? This cannot be undone.`)) return;
@@ -171,6 +187,21 @@ export default function Customers() {
             <option value="sms_ready">Can be texted</option>
             <option value="sms_missing">Has a phone, no texting consent</option>
           </Select>
+          <Select
+            value={groupFilter}
+            onChange={(e) => {
+              setPage(1);
+              setGroupFilter(e.target.value);
+            }}
+            className="w-auto"
+          >
+            <option value="">Any group</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
+          </Select>
           <Select value={sort} onChange={(e) => setSort(e.target.value)} className="w-auto">
             <option value="name">Sort by name</option>
             <option value="company">Sort by company</option>
@@ -190,6 +221,12 @@ export default function Customers() {
             </Button>
             <Button size="sm" onClick={() => bulk('unsubscribe')}>
               Mark unsubscribed
+            </Button>
+            <Button size="sm" onClick={() => setGrouping('add')}>
+              Add to group
+            </Button>
+            <Button size="sm" onClick={() => setGrouping('remove')}>
+              Remove from group
             </Button>
             <Button size="sm" onClick={() => bulk('sms_opt_in')}>
               Agreed to texts
@@ -212,13 +249,23 @@ export default function Customers() {
         ) : customers.length === 0 ? (
           <div className="p-4">
             <EmptyState
-              title="No customers yet"
-              message="Sync your Wave Accounting customers or import a CSV, and they will show up here."
-              icon={<Users className="h-7 w-7" />}
+              title={groupFilter ? 'Nobody in this group yet' : 'No customers yet'}
+              message={
+                groupFilter
+                  ? 'Clear the group filter, tick the people who belong in it and press “Add to group”.'
+                  : 'Sync your Wave Accounting customers or import a CSV, and they will show up here.'
+              }
+              icon={groupFilter ? <UsersRound className="h-7 w-7" /> : <Users className="h-7 w-7" />}
               action={
-                <Button variant="primary" onClick={() => (window.location.href = '/integrations')}>
-                  Connect Wave
-                </Button>
+                groupFilter ? (
+                  <Button variant="primary" onClick={() => setGroupFilter('')}>
+                    Show everyone
+                  </Button>
+                ) : (
+                  <Button variant="primary" onClick={() => (window.location.href = '/integrations')}>
+                    Connect Wave
+                  </Button>
+                )
               }
             />
           </div>
@@ -266,6 +313,11 @@ export default function Customers() {
                         <button onClick={() => openProfile(c.id)} className="font-medium text-white hover:text-accent">
                           {fullName(c)}
                         </button>
+                        {c.groups?.length > 0 && (
+                          <p className="max-w-[200px] truncate text-xs text-sky-300/80" title={groupNames(c)}>
+                            {groupNames(c)}
+                          </p>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-muted">{c.company_name || '—'}</td>
                       <td className="px-3 py-3 text-muted">{c.email}</td>
@@ -313,6 +365,15 @@ export default function Customers() {
                     )}
                     {c.sms_opt_in && c.phone && <Badge tone="blue">Texts OK</Badge>}
                   </div>
+                  {c.groups?.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {c.groups.map((g) => (
+                        <Badge key={g.id} tone="blue">
+                          {g.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
                   <p className="mt-2 text-sm text-soft">{c.email}</p>
                   <p className="text-xs text-muted">
                     {c.phone || 'No phone'} · Last email {formatDate(c.last_emailed_at)}
@@ -358,6 +419,35 @@ export default function Customers() {
           setEditing(null);
           load();
         }}
+      />
+
+      <GroupPicker
+        mode={grouping}
+        count={selected.length}
+        groups={groups}
+        onClose={() => setGrouping(null)}
+        onDone={async (groupId, action) => {
+          try {
+            await api.post('/api/customers/bulk', {
+              ids: selected,
+              action: action === 'add' ? 'add_to_group' : 'remove_from_group',
+              group_id: groupId,
+            });
+            toast.push(
+              'success',
+              `${selected.length} ${selected.length === 1 ? 'customer' : 'customers'} ${
+                action === 'add' ? 'added to' : 'removed from'
+              } the group.`
+            );
+            setGrouping(null);
+            setSelected([]);
+            loadGroups();
+            load();
+          } catch (err) {
+            toast.push('error', errorText(err));
+          }
+        }}
+        onCreated={loadGroups}
       />
 
       <Modal open={!!detail} onClose={() => setDetail(null)} title="Customer profile" wide>
@@ -417,6 +507,113 @@ export default function Customers() {
       </Modal>
     </div>
   );
+}
+
+/**
+ * Which group the selected customers go into, or come out of. Creating one from
+ * here matters: the usual way a group starts life is a selection on this page
+ * that does not have a group yet.
+ */
+function GroupPicker({
+  mode,
+  count,
+  groups,
+  onClose,
+  onDone,
+  onCreated,
+}: {
+  mode: 'add' | 'remove' | null;
+  count: number;
+  groups: Group[];
+  onClose: () => void;
+  onDone: (groupId: number, action: 'add' | 'remove') => void;
+  onCreated: () => void;
+}) {
+  const [groupId, setGroupId] = useState('');
+  const [newName, setNewName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => {
+    setGroupId('');
+    setNewName('');
+  }, [mode]);
+
+  const createAndUse = async () => {
+    setSaving(true);
+    try {
+      const created = await api.post<{ group: Group }>('/api/groups', { name: newName });
+      onCreated();
+      onDone(created.group.id, 'add');
+    } catch (err) {
+      toast.push('error', errorText(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={!!mode}
+      onClose={onClose}
+      title={mode === 'remove' ? 'Remove from group' : 'Add to group'}
+    >
+      <div className="space-y-4">
+        <p className="text-sm text-muted">
+          {count} {count === 1 ? 'customer' : 'customers'} selected.
+        </p>
+
+        {groups.length === 0 && mode === 'remove' ? (
+          <p className="text-sm text-muted">You have not made any groups yet.</p>
+        ) : (
+          <Field label={mode === 'remove' ? 'Take them out of' : 'Put them in'}>
+            <Select value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+              <option value="">Choose a group…</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name} ({group.member_count})
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+
+        {mode === 'add' && (
+          <div className="border-t border-line pt-4">
+            <Field label="Or start a new group" hint="It is created with these customers in it.">
+              <Input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="Service contract holders"
+              />
+            </Field>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        {mode === 'add' && newName.trim() ? (
+          <Button variant="primary" loading={saving} onClick={createAndUse}>
+            Create group and add
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            disabled={!groupId}
+            onClick={() => onDone(parseInt(groupId, 10), mode === 'remove' ? 'remove' : 'add')}
+          >
+            {mode === 'remove' ? 'Remove from group' : 'Add to group'}
+          </Button>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/** The groups a customer is in, as one line for the table. */
+function groupNames(customer: Customer): string {
+  return customer.groups.map((g) => g.name).join(', ');
 }
 
 function Detail({ label, value }: { label: string; value: string }) {

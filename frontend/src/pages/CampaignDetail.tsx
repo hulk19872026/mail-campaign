@@ -137,6 +137,7 @@ export default function CampaignDetail() {
         <Card>
           <h2 className="mb-3 text-base font-semibold text-white">Sending schedule</h2>
           <dl className="space-y-3 text-sm">
+            <Row label="Sending to" value={audienceLabel(c, data.audienceGroup)} />
             <Row label="Daily limit" value={`${data.dailyLimit} emails`} />
             <Row label="Sent today" value={`${data.sentToday} / ${data.dailyLimit}`} />
             <Row label="Starts at" value={c.send_time} />
@@ -190,6 +191,24 @@ export default function CampaignDetail() {
       </Modal>
     </div>
   );
+}
+
+/** Who this campaign was aimed at, in the words the wizard offered. */
+function audienceLabel(campaign: any, groupName: string | null): string {
+  switch (campaign.audience) {
+    case 'group':
+      return groupName ? `Group: ${groupName}` : 'A group that has since been deleted';
+    case 'all':
+      return 'All customers';
+    case 'never_emailed':
+      return 'Never emailed before';
+    case 'not_in_days':
+      return `Not emailed in ${campaign.audience_days} days`;
+    case 'custom':
+      return 'A hand-picked list';
+    default:
+      return 'Active customers';
+  }
 }
 
 function Stat({ label, value }: { label: string; value: any }) {

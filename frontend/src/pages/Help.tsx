@@ -12,6 +12,11 @@ const TOPICS = [
       'Two ways. Open Integrations and press "Sync customers" to pull everyone from Wave Accounting, or open Customers and press "Import CSV" to upload a spreadsheet. Only records with a valid email address are imported, and nobody is ever added twice.',
   },
   {
+    question: 'How do I email only some of my customers?',
+    answer:
+      'Make a group. Open Groups and press "Create group", then go to Customers, tick the people who belong in it and press "Add to group" — that button can also create the group for you with those people already in it. In the campaign wizard, step 2 now offers "A group": pick it and only those customers receive the campaign. The Groups page also has an "Email this group" button that starts the wizard with the group already chosen. Unsubscribed and disabled people are still skipped, whichever group they are in.',
+  },
+  {
     question: 'How does automatic sending work?',
     answer:
       'Once you press "Start campaign", the system checks every five minutes. When it reaches your sending time, it sends emails in small batches with a pause between each one, until it hits the daily limit. The next day it picks up where it stopped, and keeps going until everyone on the list has received the campaign exactly once.',

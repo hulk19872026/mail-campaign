@@ -12,6 +12,7 @@ Railway. You use it in a browser — there is nothing to install and no commands
 |---|---|
 | Dashboard | Customer count, emails sent, today's 99-limit, open/click rate, active campaign progress |
 | Customers | Search, filter, edit, disable, delete, bulk actions, CSV import and export, full profile with email history |
+| Groups | Named lists of customers you pick by hand, so a campaign can go to just one group |
 | Campaigns | Eight-step wizard, live queue, pause/resume/cancel, per-recipient status |
 | Email templates | Block-based visual editor with live preview and the three HULK plans built in |
 | Schedule | Daily limit, next send time, system status, manual "send next batch" button |
@@ -222,9 +223,12 @@ cd backend && npm run admin -- set-password david@hulkautomation.com "your new p
    Unsubscribed. (Use a spare address, not your own customer record.)
 8. **Click the maintenance button** in the test email. Confirm it appears under Maintenance
    leads.
-9. **Create the real campaign.** Review the confirmation screen: recipient count, daily limit,
-   estimated days, from address, subject. Send one more test from that screen, then start.
-10. **Check the dashboard the next morning.** The counter should show yesterday's total and
+9. **Optional: make a group.** If this campaign is for some of your customers rather than all of
+   them, create the group, add people to it from the Customers page, and pick it on step 2. The
+   review screen names the group under "Sending to".
+10. **Create the real campaign.** Review the confirmation screen: recipient count, daily limit,
+    estimated days, from address, subject. Send one more test from that screen, then start.
+11. **Check the dashboard the next morning.** The counter should show yesterday's total and
     today's progress.
 
 ---
@@ -260,7 +264,7 @@ backend/
   src/services/settings.ts       configurable limits with safety clamps
   src/email/render.ts            blocks to email HTML, personalization, tracking
   src/email/defaults.ts          the three starter templates
-  src/routes/                    auth, customers, campaigns, manage, insights, public
+  src/routes/                    auth, customers, groups, campaigns, manage, insights, public
 frontend/
   src/components/                UI kit, app shell, email block editor
   src/pages/                     one file per screen
@@ -271,12 +275,39 @@ railway.json                     builder, start command, health check
 
 ## Database tables
 
-`users`, `customers`, `campaigns`, `campaign_recipients`, `email_events`, `email_templates`,
+`users`, `customers`, `customer_groups`, `customer_group_members`, `campaigns`,
+`campaign_recipients`, `email_events`, `email_templates`,
 `unsubscribe_records`, `suppression_list`, `sms_suppression_list`, `maintenance_leads`, `settings`,
 `audit_logs`, `notifications`, `daily_send_counts`, `sync_runs`, `schema_migrations`.
 
 PostgreSQL is the only source of truth. Campaign progress, the daily counter and recipient
 status are never held in memory alone.
+
+---
+
+## Groups
+
+A group is a named list of customers you pick by hand — "Service contract holders", "Brooklyn
+commercial", "Quoted but never bought" — and a campaign can be sent to one group instead of to
+everybody.
+
+1. **Groups → Create group.** Give it a name and, if it helps, a note about who belongs in it.
+2. **Customers.** Tick the people who belong in it and press **Add to group**. The same button
+   can create a group on the spot with the ticked customers already in it.
+3. **Campaign wizard, step 2.** Choose **A group** and pick it from the list. The Groups page has
+   an **Email this group** button that starts the wizard with the group already chosen.
+
+Membership is exactly who you put in it — nothing is inferred, and it stays the same until you
+change it. Each group card shows how many people are in it and how many of those can actually be
+emailed, since anyone disabled, unsubscribed or without an address is skipped at sending time the
+same as everywhere else. The Customers page has a group filter, and each customer's groups are
+listed under their name.
+
+Deleting a group deletes the list, not the customers, and campaigns already sent to it keep their
+recipients and their history.
+
+Groups work for text blasts too: choose the group on step 2, and the usual texting rules still
+apply, so only members with a phone number and recorded consent are included.
 
 ---
 

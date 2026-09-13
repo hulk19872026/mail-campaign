@@ -14,6 +14,7 @@ import {
   Plug,
   Settings as SettingsIcon,
   Users,
+  UsersRound,
   Wrench,
 } from 'lucide-react';
 import { api } from '../lib/api';
@@ -23,6 +24,7 @@ import { Badge, Button } from './ui';
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/customers', label: 'Customers', icon: Users },
+  { to: '/groups', label: 'Groups', icon: UsersRound },
   { to: '/campaigns', label: 'Campaigns', icon: Mail },
   { to: '/templates', label: 'Email templates', icon: FileText },
   { to: '/schedule', label: 'Schedule', icon: CalendarClock },

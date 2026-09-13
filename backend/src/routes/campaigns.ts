@@ -23,6 +23,20 @@ import { runSchedulerNow } from '../services/scheduler';
 
 export const campaignsRouter = Router();
 
+/**
+ * A campaign aimed at a group carries its id; every other audience carries none.
+ * The group is checked here so a group deleted in another tab comes back as
+ * "pick another one" rather than as a foreign key error.
+ */
+async function groupIdOf(body: any): Promise<number | null> {
+  if (body?.audience !== 'group') return null;
+  const id = parseInt(String(body?.audience_group_id ?? ''), 10);
+  if (!Number.isFinite(id) || id <= 0) throw new AppError('Choose the group this should go to.', 400);
+  const group = await one<{ id: number }>('SELECT id FROM customer_groups WHERE id = $1', [id]);
+  if (!group) throw new AppError('That group no longer exists. Pick another one.', 400);
+  return id;
+}
+
 campaignsRouter.get(
   '/',
   handler(async (_req, res) => {
@@ -56,9 +70,15 @@ campaignsRouter.get(
       [id]
     );
     const settings = await getSettings();
+    const group = campaign.audience_group_id
+      ? await one<{ name: string }>('SELECT name FROM customer_groups WHERE id = $1', [
+          campaign.audience_group_id,
+        ])
+      : null;
     res.json({
       campaign,
       counts,
+      audienceGroup: group?.name ?? null,
       dailyLimit: isSms(campaign) ? settings.sms_daily_limit : settings.daily_limit,
       sentToday: await sentToday(settings, isSms(campaign) ? 'sms' : 'email'),
       flyerUrl: flyerUrl(campaign),
@@ -98,10 +118,10 @@ campaignsRouter.post(
     const settings = await getSettings();
     const row = await one<Campaign>(
       `INSERT INTO campaigns
-        (name, subject, template_id, blocks, audience, audience_days, audience_ids,
+        (name, subject, template_id, blocks, audience, audience_days, audience_ids, audience_group_id,
          test_mode, test_email, start_date, send_time, created_by, flyer_path, flyer_name, flyer_kind,
          channel, sms_body)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
       [
         b.name,
         b.subject ?? '',
@@ -110,6 +130,7 @@ campaignsRouter.post(
         b.audience ?? 'active',
         b.audience_days ?? 90,
         b.audience_ids ?? [],
+        await groupIdOf(b),
         !!b.test_mode,
         b.test_email ?? null,
         b.start_date ?? null,
@@ -145,7 +166,11 @@ campaignsRouter.put(
          test_email=COALESCE($10,test_email), start_date=COALESCE($11,start_date),
          send_time=COALESCE($12,send_time), flyer_path=COALESCE($13,flyer_path),
          flyer_name=COALESCE($14,flyer_name), flyer_kind=COALESCE($15,flyer_kind),
-         channel=COALESCE($16,channel), sms_body=COALESCE($17,sms_body)
+         channel=COALESCE($16,channel), sms_body=COALESCE($17,sms_body),
+         -- The group belongs to the audience choice: an edit that names an
+         -- audience sets it (to nothing, for the audiences that are not a
+         -- group), and an edit that says nothing about the audience leaves it.
+         audience_group_id = CASE WHEN $6::text IS NULL THEN audience_group_id ELSE $18 END
        WHERE id=$1 RETURNING *`,
       [
         id,
@@ -165,6 +190,7 @@ campaignsRouter.put(
         b.flyer_kind ?? null,
         b.channel === 'sms' || b.channel === 'email' ? b.channel : null,
         typeof b.sms_body === 'string' ? b.sms_body : null,
+        await groupIdOf(b),
       ]
     );
     res.json({ campaign: row });
@@ -194,6 +220,7 @@ campaignsRouter.post(
       audience: b.audience ?? 'active',
       audience_days: b.audience_days ?? 90,
       audience_ids: b.audience_ids ?? [],
+      audience_group_id: await groupIdOf(b),
       test_mode: !!b.test_mode,
       channel: b.channel === 'sms' ? 'sms' : 'email',
       sms_body: b.sms_body ?? '',

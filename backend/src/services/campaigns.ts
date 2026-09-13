@@ -20,6 +20,7 @@ export type Campaign = {
   audience: string;
   audience_days: number;
   audience_ids: number[];
+  audience_group_id: number | null;
   status: string;
   test_mode: boolean;
   test_email: string | null;
@@ -109,6 +110,17 @@ function audienceSql(campaign: Campaign): { sql: string; params: any[] } {
       params.push(campaign.audience_ids ?? []);
       where += ` AND c.id = ANY($${params.length}::int[])`;
       break;
+    // A group is a hand-picked list, so nothing is inferred from it beyond
+    // membership — except that disabled records stay out, the same as
+    // everywhere else. A group that has since been deleted matches nobody
+    // rather than quietly falling back to everyone.
+    case 'group':
+      params.push(campaign.audience_group_id ?? 0);
+      where += ` AND c.status = 'active' AND EXISTS (
+        SELECT 1 FROM customer_group_members m
+         WHERE m.customer_id = c.id AND m.group_id = $${params.length}
+      )`;
+      break;
     case 'active':
     default:
       where += ` AND c.status = 'active'`;
@@ -159,6 +171,21 @@ export async function materializeRecipients(campaign: Campaign): Promise<number>
   return total;
 }
 
+/** Why an audience came back empty, in the terms the owner chose it in. */
+function emptyAudienceMessage(campaign: Campaign): string {
+  if (isSms(campaign))
+    return (
+      'Nobody in that audience has a phone number and texting consent, so there is nobody to text. ' +
+      'Mark who has agreed to receive texts on the Customers page first.'
+    );
+  if (campaign.audience === 'group')
+    return (
+      'Nobody in that group can be emailed — it is empty, or everyone in it is disabled, ' +
+      'unsubscribed or has no address. Open Groups to see who is in it.'
+    );
+  return 'No customers match that audience, so there is nobody to send to.';
+}
+
 export async function getCampaign(id: number): Promise<Campaign | null> {
   return one<Campaign>('SELECT * FROM campaigns WHERE id = $1', [id]);
 }
@@ -188,14 +215,7 @@ export async function startCampaign(id: number, actor: string): Promise<Campaign
   }
 
   const total = await materializeRecipients(campaign);
-  if (total === 0)
-    throw new AppError(
-      isSms(campaign)
-        ? 'Nobody in that audience has a phone number and texting consent, so there is nobody to text. ' +
-          'Mark who has agreed to receive texts on the Customers page first.'
-        : 'No customers match that audience, so there is nobody to send to.',
-      400
-    );
+  if (total === 0) throw new AppError(emptyAudienceMessage(campaign), 400);
 
   const startDate = campaign.start_date ?? today(settings);
   await query(

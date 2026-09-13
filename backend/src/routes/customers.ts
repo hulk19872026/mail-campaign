@@ -3,6 +3,7 @@ import { one, query } from '../lib/db';
 import { actorOf, handler, intParam } from '../lib/http';
 import { AppError } from '../lib/errors';
 import { audit } from '../services/activity';
+import { addMembers } from './groups';
 
 export const customersRouter = Router();
 
@@ -31,6 +32,15 @@ customersRouter.get(
       where += ` AND sms_opt_in=true AND phone <> '' AND status='active' AND marketing_opt_out=false`;
     if (status === 'sms_missing') where += ` AND sms_opt_in=false AND phone <> ''`;
 
+    // Narrowing to one group is how you check who is in it, and how you pick
+    // people to take back out of it.
+    const group = intParam(req.query.group, 0);
+    if (group > 0) {
+      params.push(group);
+      where += ` AND EXISTS (SELECT 1 FROM customer_group_members m
+                              WHERE m.customer_id = c.id AND m.group_id = $${params.length})`;
+    }
+
     const orderBy =
       sort === 'recent'
         ? 'created_at DESC'
@@ -43,14 +53,17 @@ customersRouter.get(
     params.push(pageSize, (page - 1) * pageSize);
     const rows = await query(
       `SELECT c.*,
-        (SELECT count(*) FROM campaign_recipients r WHERE r.customer_id = c.id AND r.status='sent') AS campaigns_sent
+        (SELECT count(*) FROM campaign_recipients r WHERE r.customer_id = c.id AND r.status='sent') AS campaigns_sent,
+        (SELECT coalesce(json_agg(json_build_object('id', g.id, 'name', g.name) ORDER BY lower(g.name)), '[]'::json)
+           FROM customer_group_members m JOIN customer_groups g ON g.id = m.group_id
+          WHERE m.customer_id = c.id) AS groups
        FROM customers c WHERE ${where}
        ORDER BY ${orderBy}
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
     const totalRow = await one<{ count: string }>(
-      `SELECT count(*)::text AS count FROM customers WHERE ${where}`,
+      `SELECT count(*)::text AS count FROM customers c WHERE ${where}`,
       params.slice(0, params.length - 2)
     );
 
@@ -195,7 +208,20 @@ customersRouter.post(
         `UPDATE customers SET sms_opt_in=false, sms_opt_out_at=now() WHERE id = ANY($1)`,
         [ids]
       );
-    else throw new AppError('That action is not available.', 400);
+    // Groups are hand-picked, so building one out of a selection here is the
+    // main way they get filled.
+    else if (action === 'add_to_group' || action === 'remove_from_group') {
+      const groupId = intParam(req.body?.group_id, 0);
+      if (groupId <= 0) throw new AppError('Choose a group first.', 400);
+      const group = await one<{ id: number }>('SELECT id FROM customer_groups WHERE id = $1', [groupId]);
+      if (!group) throw new AppError('That group was not found.', 404);
+      if (action === 'add_to_group') await addMembers(groupId, ids);
+      else
+        await query('DELETE FROM customer_group_members WHERE group_id = $1 AND customer_id = ANY($2)', [
+          groupId,
+          ids,
+        ]);
+    } else throw new AppError('That action is not available.', 400);
 
     await audit(`customer.bulk_${action}`, { actor: actorOf(req), details: { count: ids.length } });
     res.json({ ok: true, count: ids.length });

@@ -12,7 +12,8 @@ Railway. You use it in a browser — there is nothing to install and no commands
 |---|---|
 | Dashboard | Customer count, emails sent, today's 99-limit, open/click rate, active campaign progress |
 | Customers | Search, filter, edit, disable, delete, bulk actions, CSV import and export, full profile with email history |
-| Campaigns | Eight-step wizard, live queue, pause/resume/cancel, per-recipient status |
+| Customer groups | Saved lists — contract holders, commercial accounts, one town — with member counts and a campaign audience that reads them |
+| Campaigns | Eight-step wizard with a sending calendar, live queue, pause/resume/cancel, per-recipient status |
 | Email templates | Block-based visual editor with live preview and the three HULK plans built in |
 | Schedule | Daily limit, next send time, system status, manual "send next batch" button |
 | Analytics | Sent/delivered/opened/clicked/bounced/failed, charts over time, per-campaign performance |
@@ -256,13 +257,15 @@ backend/
   src/services/wave.ts           Wave GraphQL client and customer sync
   src/services/resend.ts         sending, error classification, webhook signatures
   src/services/campaigns.ts      audience rules, batching, daily limit, retries
+  src/services/recurrence.ts     when a repeating campaign sends next
   src/services/scheduler.ts      cron loop with a cross-instance advisory lock
   src/services/settings.ts       configurable limits with safety clamps
   src/email/render.ts            blocks to email HTML, personalization, tracking
   src/email/defaults.ts          the three starter templates
-  src/routes/                    auth, customers, campaigns, manage, insights, public
+  src/routes/                    auth, customers, groups, campaigns, manage, insights, public
 frontend/
-  src/components/                UI kit, app shell, email block editor
+  src/components/                UI kit, app shell, email block editor, sending calendar
+  src/lib/recurrence.ts          the same repeat rules, for drawing the calendar
   src/pages/                     one file per screen
 Dockerfile                       three-stage build, frontend + backend + runtime
 railway.json                     builder, start command, health check
@@ -271,12 +274,66 @@ railway.json                     builder, start command, health check
 
 ## Database tables
 
-`users`, `customers`, `campaigns`, `campaign_recipients`, `email_events`, `email_templates`,
-`unsubscribe_records`, `suppression_list`, `sms_suppression_list`, `maintenance_leads`, `settings`,
-`audit_logs`, `notifications`, `daily_send_counts`, `sync_runs`, `schema_migrations`.
+`users`, `customers`, `customer_groups`, `customer_group_members`, `campaigns`,
+`campaign_recipients`, `email_events`, `email_templates`, `unsubscribe_records`,
+`suppression_list`, `sms_suppression_list`, `maintenance_leads`, `settings`, `audit_logs`,
+`notifications`, `daily_send_counts`, `sync_runs`, `schema_migrations`.
 
 PostgreSQL is the only source of truth. Campaign progress, the daily counter and recipient
 status are never held in memory alone.
+
+---
+
+## Repeating campaigns and the sending calendar
+
+The Schedule step of the wizard sets how often a campaign goes out, beside a calendar that shows
+the days it will land on. Click a day to move the first send there; the rest of the schedule
+follows from it.
+
+| Choice | What it does |
+|---|---|
+| Once | One send, the way campaigns have always worked |
+| Every day | Every day, or every 2, 3, 4… days |
+| Every week | On the weekdays you tick, every week or every 2, 3, 4… weeks |
+| Every month | On a day of the month you choose, every month or every 2, 3… months |
+
+A repeat runs until you stop it, for a set number of sends, or until a date. The review screen
+says the rule in plain English and, when the run is limited, how many emails it adds up to.
+
+Each pass through the audience is an **occurrence**. When one finishes, the campaign is parked on
+its next sending day rather than being marked complete; when that day arrives, the audience is
+built again from scratch. That last part matters: someone added to your list — or to the group —
+between sends is included next time, and someone who unsubscribed is not. The duplicate guard is
+per occurrence, so nobody is emailed twice in one send while the same person can still be reached
+by next month's.
+
+The rule is measured from the campaign's first sending day, which is recorded separately and never
+moves. A monthly campaign that starts on the 31st therefore keeps returning to the 31st, taking the
+last day of February and April on the way, rather than sliding to the 28th and staying there.
+
+Pausing a campaign stops the repeats as well as the send in progress. The campaign page shows which
+send it is on, how many have gone out in total, and a calendar of what is still to come.
+
+---
+
+## Customer groups
+
+A group is a list you put together yourself: maintenance contract holders, commercial accounts, one
+town, last year's installs. Make them on the Customer groups page, then choose **Specific customer
+groups** on the Customers step of the wizard to aim a campaign at one or several.
+
+- Add people from the group's own Members panel, or tick them on the Customers page and use
+  **Add to group**.
+- The Customers page filters by group, so the usual search, sorting and bulk actions all work
+  inside one.
+- Each group shows how many of its members can actually be emailed and texted, which is what a
+  campaign aimed at it would really reach.
+- Membership is read on every sending day, so a repeating campaign follows the group as it changes.
+- Deleting a group leaves its customers alone, and is refused while a live campaign still points at
+  it.
+
+Unsubscribed, suppressed and disabled customers are excluded from a group audience exactly as they
+are everywhere else.
 
 ---
 

@@ -10,6 +10,7 @@ import { errorMiddleware } from './lib/http';
 import { seedTemplates } from './email/defaults';
 import { authRouter } from './routes/auth';
 import { customersRouter } from './routes/customers';
+import { groupsRouter } from './routes/groups';
 import { campaignsRouter } from './routes/campaigns';
 import { manageRouter } from './routes/manage';
 import { insightsRouter } from './routes/insights';
@@ -40,6 +41,7 @@ app.use('/', publicRouter);
 // Everything under /api needs a session, except signing in.
 app.use('/api/auth', authRouter);
 app.use('/api/customers', requireAuth, customersRouter);
+app.use('/api/groups', requireAuth, groupsRouter);
 app.use('/api/campaigns', requireAuth, campaignsRouter);
 app.use('/api', requireAuth, manageRouter);
 app.use('/api', requireAuth, insightsRouter);

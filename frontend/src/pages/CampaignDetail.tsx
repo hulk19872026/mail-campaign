@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, errorText } from '../lib/api';
 import { formatDateTime, formatNumber, fullName } from '../lib/format';
+import SendCalendar from '../components/SendCalendar';
+import { NO_REPEAT, Repeat, RepeatInterval } from '../lib/recurrence';
 import {
   Badge,
   Button,
   Card,
   ErrorNotice,
+  HelpTip,
   Field,
   Input,
   Modal,
@@ -82,6 +85,19 @@ export default function CampaignDetail() {
   const counts = data.counts ?? {};
   const sent = Number(counts.sent ?? 0);
   const total = Number(counts.total ?? 0);
+  const schedule = data.schedule ?? { repeats: false, description: 'Sends once', upcoming: [] };
+  const repeat: Repeat = schedule.repeats
+    ? {
+        interval: c.repeat_interval as RepeatInterval,
+        every: Number(c.repeat_every ?? 1),
+        days: c.repeat_days ?? [],
+        dayOfMonth: c.repeat_day_of_month ?? null,
+        until: c.repeat_until ? String(c.repeat_until).slice(0, 10) : null,
+        count: c.repeat_count ?? null,
+      }
+    : NO_REPEAT;
+  const anchor = c.start_date ? String(c.start_date).slice(0, 10) : '';
+  const lifetimeSent = Number(data.lifetime?.sent ?? sent);
 
   return (
     <div className="space-y-5">
@@ -135,19 +151,71 @@ export default function CampaignDetail() {
         </Card>
 
         <Card>
-          <h2 className="mb-3 text-base font-semibold text-white">Sending schedule</h2>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-base font-semibold text-white">Sending schedule</h2>
+            {schedule.repeats && <Badge tone="blue">Repeats</Badge>}
+          </div>
           <dl className="space-y-3 text-sm">
+            <Row label="How often" value={schedule.description} />
             <Row label="Daily limit" value={`${data.dailyLimit} emails`} />
             <Row label="Sent today" value={`${data.sentToday} / ${data.dailyLimit}`} />
             <Row label="Starts at" value={c.send_time} />
-            <Row label="First send day" value={c.start_date ?? 'Immediately'} />
+            <Row
+              label={schedule.repeats ? 'This send began' : 'First send day'}
+              value={anchor || 'Immediately'}
+            />
+            {schedule.repeats && (
+              <>
+                <Row label="Send number" value={`${c.occurrence}${c.repeat_count ? ` of ${c.repeat_count}` : ''}`} />
+                <Row label="Sent across all sends" value={formatNumber(lifetimeSent)} />
+              </>
+            )}
             <Row
               label="Estimated days left"
               value={`${Math.ceil(Number(counts.queued ?? 0) / Math.max(1, data.dailyLimit))}`}
             />
           </dl>
+          {data.groups?.length > 0 && (
+            <div className="mt-4 border-t border-line pt-4">
+              <p className="mb-2 flex items-center gap-1.5 text-xs text-muted">
+                Customer groups
+                <HelpTip>
+                  Membership is read on each sending day, so anyone added to these groups is included in
+                  the next send.
+                </HelpTip>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {data.groups.map((g: { id: number; name: string }) => (
+                  <Badge key={g.id} tone="blue">
+                    {g.name}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
       </div>
+
+      {schedule.repeats && anchor && (
+        <Card>
+          <h2 className="mb-3 text-base font-semibold text-white">Sending calendar</h2>
+          <div className="grid gap-4 sm:grid-cols-[320px_1fr] sm:items-start">
+            <SendCalendar repeat={repeat} startDate={anchor} />
+            <div className="text-sm text-muted">
+              <p>
+                {schedule.description}. Each highlighted day is a full send to whoever matches the
+                audience that morning.
+              </p>
+              {data.campaign.next_run_date && (
+                <p className="mt-2 text-soft">
+                  Next send: {String(data.campaign.next_run_date).slice(0, 10)} at {c.send_time}.
+                </p>
+              )}
+              <p className="mt-2">Pausing the campaign stops the repeats as well as the current send.</p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <Card padded={false}>
         <div className="flex flex-wrap items-center gap-2 border-b border-line p-4">

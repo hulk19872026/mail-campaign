@@ -6,6 +6,7 @@ import { api } from './lib/api';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Customers from './pages/Customers';
+import Groups from './pages/Groups';
 import Campaigns from './pages/Campaigns';
 import CampaignDetail from './pages/CampaignDetail';
 import CampaignWizard from './pages/CampaignWizard';
@@ -65,6 +66,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard user={user} />} />
           <Route path="/customers" element={<Customers />} />
+          <Route path="/groups" element={<Groups />} />
           <Route path="/campaigns" element={<Campaigns />} />
           <Route path="/campaigns/new" element={<CampaignWizard />} />
           <Route path="/campaigns/:id" element={<CampaignDetail />} />

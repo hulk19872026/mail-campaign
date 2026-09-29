@@ -18,8 +18,8 @@ Railway. You use it in a browser — there is nothing to install and no commands
 | Schedule | Daily limit, next send time, system status, manual "send next batch" button |
 | Analytics | Sent/delivered/opened/clicked/bounced/failed, charts over time, per-campaign performance |
 | Maintenance leads | Everyone who clicked a maintenance button, with new → contacted → quoted → won/lost |
-| Integrations | Wave sync and Resend status, connection tests, test email |
-| Settings | Company details, daily limit, batch size, delay, send time, addresses, password, activity log |
+| Integrations | Wave sync status and next nightly run, Resend status, connection tests, test email |
+| Settings | Company details, daily limit, batch size, delay, send time, nightly customer sync, addresses, password, activity log |
 | Help | Plain-language answers to the eight questions that come up most |
 
 ---
@@ -128,7 +128,13 @@ accounts.
 5. In the app, open **Integrations → Test connection**, then **Sync customers**.
 
 Only customers with a valid email address are imported. Records are matched on their Wave ID,
-so syncing repeatedly never creates duplicates. Run a sync whenever you add customers in Wave.
+so syncing repeatedly never creates duplicates.
+
+After that first sync the app keeps itself up to date: it pulls the list from Wave **every night**,
+by default at 2:00 AM in your timezone. Someone you add in Wave today is in the app — and in
+tomorrow morning's campaign — without anyone pressing a button. The button is still there for when
+you want the list right now, and a sync you run yourself counts for that day, so the nightly one
+stands down. Both the switch and the hour are under Settings → Customer sync.
 
 ---
 
@@ -170,13 +176,41 @@ Hard bounces and spam complaints automatically add the address to your suppressi
    notification.
 
 **Why it cannot double-send:** `campaign_recipients` has a unique index on
-`(campaign_id, customer_id)`. One row per person per campaign — enforced by PostgreSQL, not by
-application code. If Railway restarts mid-batch, anything left in the `sending` state is
+`(campaign_id, customer_id, occurrence)`. One row per person per send — enforced by PostgreSQL,
+not by application code. A repeating campaign's next occurrence is a separate send, which is why
+the occurrence is part of the key rather than the campaign alone. If Railway restarts mid-batch, anything left in the `sending` state is
 requeued on boot, and rows already marked `sent` are never touched again.
 
 **Failures:** a rejected address (invalid, unverified domain, bad key) is marked failed
 immediately and does not count as delivered. A network blip or rate limit is requeued and
 retried up to three times, then marked failed. Nothing retries forever.
+
+---
+
+## The nightly customer sync
+
+A second job runs beside the sender. Every fifteen minutes it asks one question: is it past the
+sync time today, and has today's sync not happened yet? If so, it pulls the customer list from
+Wave. In practice that means one sync a night, at the hour you chose.
+
+It is a repeated check rather than a fixed cron time because the hour that matters is **yours**,
+not the server's, and a cron expression is fixed to the server's clock. Checking often also means
+a missed window is still caught: if the app was asleep at 2:00 AM, or only started this morning,
+the next check that day runs the sync rather than skipping to tomorrow.
+
+- **It never runs twice in a day.** "Already synced today" is decided from the last successful
+  run, in your timezone — so a sync you ran by hand at lunchtime stands the nightly one down.
+- **Two instances cannot both sync.** The job takes a PostgreSQL advisory lock, a different one
+  from the sender's, so a long send never holds up the sync and vice versa. During a deploy, where
+  the old and new containers overlap, only one of them pulls the list.
+- **A broken Wave is not hammered.** If Wave is down, the sync is retried, but it gives up after
+  three failed attempts in a day and waits for tomorrow — rather than failing, and notifying you,
+  every quarter of an hour until midnight.
+- **Turning it off changes nothing else.** Settings → Customer sync switches it off; the
+  "Sync customers" button on Integrations keeps working exactly as before.
+
+The Integrations page shows when the list was last pulled and when it is next due, both read in
+your timezone.
 
 ---
 

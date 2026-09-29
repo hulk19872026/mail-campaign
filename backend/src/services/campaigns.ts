@@ -55,12 +55,14 @@ export function today(settings: AppSettings): string {
   return DateTime.now().setZone(settings.timezone).toISODate() as string;
 }
 
-function minutesNow(settings: AppSettings): number {
+/** Minutes since midnight, right now, in the business's own timezone. */
+export function minutesNow(settings: AppSettings): number {
   const now = DateTime.now().setZone(settings.timezone);
   return now.hour * 60 + now.minute;
 }
 
-function parseTime(value: string): number {
+/** "09:00" as minutes since midnight. Anything unparseable falls back to 09:00. */
+export function parseTime(value: string): number {
   const [h, m] = String(value || '09:00').split(':').map((n) => parseInt(n, 10));
   return (isNaN(h) ? 9 : h) * 60 + (isNaN(m) ? 0 : m);
 }

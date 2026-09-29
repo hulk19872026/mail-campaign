@@ -9,7 +9,13 @@ import { actorOf, handler, intParam } from '../lib/http';
 import { AppError } from '../lib/errors';
 import { audit } from '../services/activity';
 import { getSettings, saveSettings } from '../services/settings';
-import { lastSync, resolveBusinessId, syncWaveCustomers, testWaveConnection } from '../services/wave';
+import {
+  lastSync,
+  nextAutomaticSync,
+  resolveBusinessId,
+  syncWaveCustomers,
+  testWaveConnection,
+} from '../services/wave';
 import { listResendDomains, testResendConnection } from '../services/resend';
 import { testTwilioConnection, twilioConfigured } from '../services/twilio';
 import { schedulerState } from '../services/scheduler';
@@ -163,6 +169,12 @@ manageRouter.get(
         businessId,
         lastSync: await lastSync(),
         customers: Number(customers?.count ?? 0),
+        autoSync: settings.wave_sync_enabled,
+        syncTime: settings.wave_sync_time,
+        nextSync: await nextAutomaticSync(settings),
+        // The page shows the next run in this clock, so it agrees with syncTime.
+        timezone: settings.timezone,
+        lastAutoSyncAt: schedulerState.lastSyncAt,
       },
       resend: {
         configured: !!env.RESEND_API_KEY,
@@ -264,6 +276,9 @@ manageRouter.get(
       activeCampaign,
       timezone: settings.timezone,
       sendTime: settings.send_time,
+      waveAutoSync: settings.wave_sync_enabled,
+      waveSyncTime: settings.wave_sync_time,
+      nextWaveSync: await nextAutomaticSync(settings),
       dailyLimit: settings.daily_limit,
       sentToday: await sentToday(settings),
     });

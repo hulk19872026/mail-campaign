@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, errorText } from '../lib/api';
-import { formatDateTime, formatNumber } from '../lib/format';
+import { formatDateTime, formatDateTimeIn, formatNumber } from '../lib/format';
 import { Badge, Button, Card, ErrorNotice, Field, Input, Spinner, StatusDot, useToast } from '../components/ui';
 
 export default function Integrations() {
@@ -124,6 +124,18 @@ export default function Integrations() {
                 : 'Not synced yet'}
             </dd>
           </div>
+          <div>
+            <dt className="text-xs text-muted">Automatic sync</dt>
+            <dd className="mt-1 text-sm text-white">
+              {data.wave.autoSync ? `Every night at ${data.wave.syncTime}` : 'Off — sync by hand'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted">Next automatic sync</dt>
+            <dd className="mt-1 text-sm text-white">
+              {data.wave.autoSync ? formatDateTimeIn(data.wave.nextSync, data.wave.timezone) : '—'}
+            </dd>
+          </div>
         </dl>
 
         {data.wave.lastSync?.error && (
@@ -179,7 +191,10 @@ export default function Integrations() {
         </div>
         <p className="mt-3 text-xs text-muted">
           Only customers with a valid email address are imported. Existing records are matched on their Wave ID, so
-          syncing twice never creates duplicates.
+          syncing twice never creates duplicates.{' '}
+          {data.wave.autoSync
+            ? 'This runs on its own every night, so pressing the button is only needed when you want the list now.'
+            : 'Automatic nightly syncing is turned off in Settings → Customer sync.'}
         </p>
       </Card>
 

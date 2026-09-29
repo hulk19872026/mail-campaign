@@ -1,9 +1,10 @@
+import { DateTime } from 'luxon';
 import { env } from '../lib/env';
 import { one, query } from '../lib/db';
 import { log } from '../lib/logger';
 import { AppError } from '../lib/errors';
 import { audit, notify } from './activity';
-import { getSettings } from './settings';
+import { AppSettings, getSettings } from './settings';
 
 // Overridable so the sync can be exercised against a stand-in API in tests.
 // Unset in production, where it is Wave's own endpoint.
@@ -297,4 +298,62 @@ export async function lastSync() {
     `SELECT id, status, imported, updated, skipped, error, started_at, finished_at
      FROM sync_runs WHERE source='wave' ORDER BY id DESC LIMIT 1`
   );
+}
+
+/** Is there a token and a business to pull from? Nothing can sync without both. */
+export async function waveConfigured(): Promise<boolean> {
+  return !!env.WAVE_API_TOKEN && !!(await resolveBusinessId());
+}
+
+function businessDay(when: Date, timezone: string): string | null {
+  return DateTime.fromJSDate(when).setZone(timezone).toISODate();
+}
+
+/**
+ * The business-local day the customer list was last pulled successfully, or
+ * null if it never has been. This is what "already synced today" is decided on,
+ * so a sync someone ran by hand at lunchtime counts and the nightly one stands
+ * down.
+ */
+export async function lastSuccessfulSyncDay(timezone: string): Promise<string | null> {
+  const row = await one<{ finished_at: Date | null }>(
+    `SELECT finished_at FROM sync_runs
+      WHERE source='wave' AND status='success' AND finished_at IS NOT NULL
+      ORDER BY id DESC LIMIT 1`
+  );
+  return row?.finished_at ? businessDay(row.finished_at, timezone) : null;
+}
+
+/**
+ * How many syncs have already failed today. Wave being down should not mean a
+ * failure notification every quarter of an hour until midnight, so the nightly
+ * job gives up after a few tries and waits for tomorrow.
+ */
+export async function failedSyncsToday(timezone: string): Promise<number> {
+  const rows = await query<{ started_at: Date }>(
+    `SELECT started_at FROM sync_runs
+      WHERE source='wave' AND status='failed' ORDER BY id DESC LIMIT 20`
+  );
+  const day = DateTime.now().setZone(timezone).toISODate();
+  return rows.filter((r) => businessDay(r.started_at, timezone) === day).length;
+}
+
+/** The maximum automatic attempts in one day, after which it waits for tomorrow. */
+export const MAX_SYNC_ATTEMPTS_PER_DAY = 3;
+
+/**
+ * When the next automatic sync is expected, for the Integrations page. Null when
+ * automatic syncing is switched off.
+ */
+export async function nextAutomaticSync(settings: AppSettings): Promise<string | null> {
+  if (!settings.wave_sync_enabled) return null;
+  const now = DateTime.now().setZone(settings.timezone);
+  const [hour, minute] = settings.wave_sync_time.split(':').map((n) => parseInt(n, 10));
+  const at = now.set({ hour, minute, second: 0, millisecond: 0 });
+
+  const done = (await lastSuccessfulSyncDay(settings.timezone)) === now.toISODate();
+  if (done) return at.plus({ days: 1 }).toISO();
+  // Not yet done today: either it is still to come, or the window has passed and
+  // the next tick will pick it up.
+  return (at > now ? at : now).toISO();
 }

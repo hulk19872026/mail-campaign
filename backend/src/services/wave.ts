@@ -152,6 +152,28 @@ const CUSTOMERS_QUERY = `
   }
 `;
 
+const EMAIL_PATTERN = /[^\s@<>(),;:"']+@[^\s@<>(),;:"']+\.[^\s@<>(),;:"']+/;
+
+/** The first email address found in a piece of text, lower-cased, or null. */
+function findEmail(value: unknown): string | null {
+  const match = String(value ?? '').match(EMAIL_PATTERN);
+  return match ? match[0].replace(/\.+$/, '').toLowerCase() : null;
+}
+
+/**
+ * The "Contact" row on a Wave customer is its first and last name, but people
+ * often type the contact's email address into it instead. Pull an address out
+ * of either box so a customer with an empty Email field can still be reached,
+ * and keep the address out of the name fields.
+ */
+function contactDetails(node: any): { email: string | null; firstName: string; lastName: string } {
+  const parts = [node.firstName, node.lastName].map((v) => String(v ?? '').trim());
+  const email = parts.map(findEmail).find(Boolean) ?? null;
+  if (!email) return { email: null, firstName: parts[0], lastName: parts[1] };
+  const names = parts.filter((p) => p && !findEmail(p));
+  return { email, firstName: names[0] ?? '', lastName: names[1] ?? '' };
+}
+
 export type SyncResult = {
   imported: number;
   updated: number;
@@ -206,8 +228,9 @@ export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
 
       for (const edge of edges) {
         const node = edge.node;
-        const email = String(node.email ?? '').trim().toLowerCase();
-        if (!email || !email.includes('@')) {
+        const contact = contactDetails(node);
+        const email = findEmail(node.email) ?? contact.email;
+        if (!email) {
           skipped++;
           continue;
         }
@@ -235,8 +258,8 @@ export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
            RETURNING (xmax = 0) AS inserted`,
           [
             node.id,
-            node.firstName || firstName || '',
-            node.lastName || rest.join(' ') || '',
+            contact.firstName || firstName || '',
+            contact.lastName || rest.join(' ') || '',
             node.name ?? '',
             email,
             node.phone || node.mobile || '',

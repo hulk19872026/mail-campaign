@@ -127,8 +127,10 @@ accounts.
    Copy the `id` of HULK Automation into `WAVE_BUSINESS_ID`.
 5. In the app, open **Integrations → Test connection**, then **Sync customers**.
 
-Only customers with a valid email address are imported. Records are matched on their Wave ID,
-so syncing repeatedly never creates duplicates.
+Only customers with a valid email address are imported. When a customer's **Email** box in Wave
+is empty, the sync looks in its **Contact** boxes (first and last name) for an address someone
+typed there instead, and uses that one. The address is kept out of the customer's name. Records
+are matched on their Wave ID, so syncing repeatedly never creates duplicates.
 
 After that first sync the app keeps itself up to date: it pulls the list from Wave **every night**,
 by default at 2:00 AM in your timezone. Someone you add in Wave today is in the app — and in

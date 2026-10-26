@@ -62,4 +62,18 @@ export const env = {
   SMS_NUMBER: process.env.SMS_NUMBER ?? '+12126879116',
 };
 
+if (isProdEnv() && /localhost|127\.0\.0\.1/.test(env.APP_URL)) {
+  // Every flyer image, tracking pixel, click link and unsubscribe link is built
+  // from APP_URL. Left at the default, they all point at the container itself,
+  // so a recipient's mail client cannot load any of them.
+  log.warn(
+    `APP_URL is ${env.APP_URL}, which nothing outside this server can reach. Flyer images and ` +
+      'unsubscribe links in sent email will be broken. Set APP_URL to your public URL in Railway.'
+  );
+}
+
+function isProdEnv(): boolean {
+  return (process.env.NODE_ENV ?? 'development') === 'production';
+}
+
 export const isProd = env.NODE_ENV === 'production';

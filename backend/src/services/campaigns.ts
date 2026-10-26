@@ -7,6 +7,15 @@ import { getSettings, AppSettings } from './settings';
 import { sendEmail } from './resend';
 import { normalizePhone, phoneKeySql, sendSms, twilioConfigured } from './twilio';
 import { audit, notify } from './activity';
+import {
+  Repeat,
+  describeRepeat,
+  isRecurring,
+  nextOccurrence,
+  occurrencesFrom,
+  repeatOf,
+  toDateString,
+} from './recurrence';
 import { renderEmail, unsubscribeUrl, personalize, Block } from '../email/render';
 
 export type Campaign = {
@@ -29,18 +38,31 @@ export type Campaign = {
   total_recipients: number;
   channel: string; // email | sms
   sms_body: string;
+  group_ids: number[];
+  repeat_interval: string; // none | daily | weekly | monthly
+  repeat_every: number;
+  repeat_days: number[];
+  repeat_day_of_month: number | null;
+  repeat_until: string | null;
+  repeat_count: number | null;
+  occurrence: number;
+  next_run_date: string | null;
+  last_run_date: string | null;
+  repeat_anchor_date: string | null;
 };
 
 export function today(settings: AppSettings): string {
   return DateTime.now().setZone(settings.timezone).toISODate() as string;
 }
 
-function minutesNow(settings: AppSettings): number {
+/** Minutes since midnight, right now, in the business's own timezone. */
+export function minutesNow(settings: AppSettings): number {
   const now = DateTime.now().setZone(settings.timezone);
   return now.hour * 60 + now.minute;
 }
 
-function parseTime(value: string): number {
+/** "09:00" as minutes since midnight. Anything unparseable falls back to 09:00. */
+export function parseTime(value: string): number {
   const [h, m] = String(value || '09:00').split(':').map((n) => parseInt(n, 10));
   return (isNaN(h) ? 9 : h) * 60 + (isNaN(m) ? 0 : m);
 }
@@ -109,6 +131,16 @@ function audienceSql(campaign: Campaign): { sql: string; params: any[] } {
       params.push(campaign.audience_ids ?? []);
       where += ` AND c.id = ANY($${params.length}::int[])`;
       break;
+    // A group is a hand-picked list that outlives the campaign, so membership
+    // is read at send time: someone added to the group tomorrow is included in
+    // tomorrow's occurrence of a repeating campaign.
+    case 'group':
+      params.push(campaign.group_ids ?? []);
+      where += ` AND c.status = 'active' AND EXISTS (
+         SELECT 1 FROM customer_group_members m
+          WHERE m.customer_id = c.id AND m.group_id = ANY($${params.length}::int[])
+       )`;
+      break;
     case 'active':
     default:
       where += ` AND c.status = 'active'`;
@@ -128,35 +160,113 @@ export async function previewAudienceCount(campaign: Campaign): Promise<number> 
 }
 
 /**
- * Writes one recipient row per customer. The unique index on
- * (campaign_id, customer_id) is what makes double-sending impossible.
+ * Writes one recipient row per customer for the campaign's current occurrence.
+ * The unique index on (campaign_id, customer_id, occurrence) is what makes
+ * double-sending impossible within one send, while still letting a repeating
+ * campaign reach the same people again next week.
  */
 export async function materializeRecipients(campaign: Campaign): Promise<number> {
+  const occurrence = campaign.occurrence ?? 1;
+
   if (campaign.test_mode) {
     if (!campaign.test_email) throw new AppError('Add a test address before starting a test send.', 400);
     await query(
-      `INSERT INTO campaign_recipients (campaign_id, customer_id, email, phone)
-       SELECT $1, NULL, $2, $3
-       WHERE NOT EXISTS (SELECT 1 FROM campaign_recipients WHERE campaign_id = $1)`,
-      [campaign.id, isSms(campaign) ? '' : campaign.test_email, isSms(campaign) ? campaign.test_email : '']
+      `INSERT INTO campaign_recipients (campaign_id, customer_id, email, phone, occurrence)
+       SELECT $1, NULL, $2, $3, $4
+       WHERE NOT EXISTS (
+         SELECT 1 FROM campaign_recipients WHERE campaign_id = $1 AND occurrence = $4
+       )`,
+      [
+        campaign.id,
+        isSms(campaign) ? '' : campaign.test_email,
+        isSms(campaign) ? campaign.test_email : '',
+        occurrence,
+      ]
     );
   } else {
     const { sql, params } = audienceSql(campaign);
     await query(
-      `INSERT INTO campaign_recipients (campaign_id, customer_id, email, phone)
-       SELECT $${params.length + 1}, e.id, e.email, e.phone FROM (${sql}) AS e
-       ON CONFLICT (campaign_id, customer_id) WHERE customer_id IS NOT NULL DO NOTHING`,
-      [...params, campaign.id]
+      `INSERT INTO campaign_recipients (campaign_id, customer_id, email, phone, occurrence)
+       SELECT $${params.length + 1}, e.id, e.email, e.phone, $${params.length + 2} FROM (${sql}) AS e
+       ON CONFLICT (campaign_id, customer_id, occurrence) WHERE customer_id IS NOT NULL DO NOTHING`,
+      [...params, campaign.id, occurrence]
     );
   }
 
   const row = await one<{ count: string }>(
-    'SELECT count(*)::text AS count FROM campaign_recipients WHERE campaign_id = $1',
-    [campaign.id]
+    'SELECT count(*)::text AS count FROM campaign_recipients WHERE campaign_id = $1 AND occurrence = $2',
+    [campaign.id, occurrence]
   );
   const total = Number(row?.count ?? 0);
   await query('UPDATE campaigns SET total_recipients = $2 WHERE id = $1', [campaign.id, total]);
   return total;
+}
+
+/** The rule this campaign repeats on, and whether it repeats at all. */
+export function repeatFor(campaign: Campaign): Repeat {
+  return repeatOf(campaign);
+}
+
+/**
+ * The day the repeat rule is measured from: the campaign's first sending day,
+ * which never moves. Campaigns started before this column existed fall back to
+ * start_date, which for them has not moved either.
+ */
+export function anchorOf(campaign: Campaign): string | null {
+  return toDateString(campaign.repeat_anchor_date) ?? toDateString(campaign.start_date);
+}
+
+export function scheduleSummary(campaign: Campaign): {
+  repeats: boolean;
+  description: string;
+  upcoming: string[];
+  nextRun: string | null;
+} {
+  const repeat = repeatOf(campaign);
+  const anchor = anchorOf(campaign);
+  return {
+    repeats: isRecurring(repeat),
+    description: describeRepeat(repeat, anchor),
+    upcoming: anchor ? occurrencesFrom(repeat, anchor, { limit: 6 }) : [],
+    nextRun: toDateString(campaign.next_run_date) ?? anchor,
+  };
+}
+
+/**
+ * Queues the audience for the occurrence that is due today. A campaign that
+ * sends once does this when it is started; a repeating one comes back here on
+ * each of its sending days, after the previous occurrence has drained.
+ */
+async function queueOccurrenceIfDue(campaign: Campaign, day: string): Promise<void> {
+  if (toDateString(campaign.last_run_date) === day) return;
+
+  const pending = await one<{ count: string }>(
+    `SELECT count(*)::text AS count FROM campaign_recipients
+      WHERE campaign_id = $1 AND occurrence = $2 AND status IN ('queued','sending')`,
+    [campaign.id, campaign.occurrence ?? 1]
+  );
+
+  // Nothing queued for this occurrence yet means a repeat has come round: build
+  // the list again, against the audience as it stands today.
+  if (Number(pending?.count ?? 0) === 0) {
+    const total = await materializeRecipients(campaign);
+    if (total === 0) {
+      log.warn('A repeating campaign had nobody to send to this time', {
+        campaign: campaign.id,
+        occurrence: campaign.occurrence,
+      });
+    } else if ((campaign.occurrence ?? 1) > 1) {
+      await notify(
+        'info',
+        'Repeating campaign sending again',
+        `${campaign.name} — send ${campaign.occurrence} of ${
+          campaign.repeat_count ?? 'an ongoing schedule'
+        }, ${total} recipients queued.`
+      );
+    }
+  }
+
+  await query('UPDATE campaigns SET last_run_date = $2 WHERE id = $1', [campaign.id, day]);
 }
 
 export async function getCampaign(id: number): Promise<Campaign | null> {
@@ -207,13 +317,23 @@ export async function startCampaign(id: number, actor: string): Promise<Campaign
       400
     );
 
-  const startDate = campaign.start_date ?? today(settings);
+  const startDate = toDateString(campaign.start_date) ?? today(settings);
   await query(
-    `UPDATE campaigns SET status='active', started_at = COALESCE(started_at, now()), start_date=$2 WHERE id=$1`,
+    `UPDATE campaigns SET status='active', started_at = COALESCE(started_at, now()),
+       start_date=$2, next_run_date=$2,
+       repeat_anchor_date = COALESCE(repeat_anchor_date, $2)
+     WHERE id=$1`,
     [id, startDate]
   );
+  const repeat = repeatOf(campaign);
   await audit('campaign.started', { actor, entity: 'campaign', entityId: id, details: { total } });
-  await notify('success', 'Campaign started', `${campaign.name} — ${total} recipients queued.`);
+  await notify(
+    'success',
+    'Campaign started',
+    isRecurring(repeat)
+      ? `${campaign.name} — ${total} recipients queued. ${describeRepeat(repeat, startDate)}.`
+      : `${campaign.name} — ${total} recipients queued.`
+  );
   return (await getCampaign(id))!;
 }
 
@@ -603,6 +723,9 @@ export async function processDueCampaigns(opts: { force?: boolean } = {}): Promi
       const channel = isSms(campaign) ? 'sms' : 'email';
       if (budgets[channel] <= 0) continue;
 
+      // A repeating campaign whose next day has arrived has no queue yet.
+      await queueOccurrenceIfDue(campaign, day);
+
       const channelLimit = limitFor(settings, channel);
       const campaignCap = campaign.daily_limit
         ? Math.min(campaign.daily_limit, channelLimit)
@@ -639,7 +762,7 @@ export async function processDueCampaigns(opts: { force?: boolean } = {}): Promi
         if (settings.batch_delay_seconds > 0) await sleep(settings.batch_delay_seconds * 1000);
       }
 
-      await maybeComplete(campaign);
+      await maybeComplete(campaign, day);
       if (budgets.email <= 0 && budgets.sms <= 0) break;
     }
 
@@ -672,15 +795,50 @@ export async function processDueCampaigns(opts: { force?: boolean } = {}): Promi
   }
 }
 
-async function maybeComplete(campaign: Campaign): Promise<void> {
+/**
+ * Called once the current occurrence has drained. A campaign that sends once is
+ * finished; a repeating one is parked on its next sending day, where the
+ * scheduler picks it up again and queues the audience afresh.
+ */
+async function maybeComplete(campaign: Campaign, day: string): Promise<void> {
   const row = await one<{ count: string }>(
     `SELECT count(*)::text AS count FROM campaign_recipients
      WHERE campaign_id = $1 AND status IN ('queued','sending')`,
     [campaign.id]
   );
   if (Number(row?.count ?? 0) > 0) return;
+
+  const repeat = repeatOf(campaign);
+  const anchor = anchorOf(campaign) ?? day;
+  const sent = campaign.occurrence ?? 1;
+  const next = nextOccurrence(repeat, anchor, day, sent);
+
+  if (next) {
+    // start_date doubles as "the day this occurrence sends"; the scheduler only
+    // looks at campaigns whose start_date has arrived, so moving it forward is
+    // what parks the campaign until then. repeat_anchor_date is what the rule
+    // itself is measured from, and that stays where it started.
+    await query(
+      `UPDATE campaigns SET occurrence = occurrence + 1, start_date = $2, next_run_date = $2
+        WHERE id = $1 AND status = 'active'`,
+      [campaign.id, next]
+    );
+    await audit('campaign.occurrence_scheduled', {
+      entity: 'campaign',
+      entityId: campaign.id,
+      details: { occurrence: sent + 1, date: next },
+    });
+    await notify(
+      'info',
+      'Campaign send finished',
+      `${campaign.name} has finished this send. The next one goes out on ${next}.`
+    );
+    return;
+  }
+
   await query(
-    `UPDATE campaigns SET status='completed', completed_at=now() WHERE id=$1 AND status='active'`,
+    `UPDATE campaigns SET status='completed', completed_at=now(), next_run_date=NULL
+      WHERE id=$1 AND status='active'`,
     [campaign.id]
   );
   await audit('campaign.completed', { entity: 'campaign', entityId: campaign.id });

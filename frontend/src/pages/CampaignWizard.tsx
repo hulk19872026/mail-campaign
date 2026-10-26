@@ -4,6 +4,18 @@ import { AlertTriangle, Check, Upload } from 'lucide-react';
 import { api, errorText } from '../lib/api';
 import { formatNumber } from '../lib/format';
 import EmailEditor, { Block } from '../components/EmailEditor';
+import SendCalendar from '../components/SendCalendar';
+import {
+  NO_REPEAT,
+  Repeat,
+  RepeatInterval,
+  WEEKDAYS,
+  describeRepeat,
+  isRecurring,
+  occurrencesFrom,
+  todayIso,
+  weekday,
+} from '../lib/recurrence';
 import { Badge, Button, Card, Field, HelpTip, Input, Radio, Select, Textarea, Toggle, useToast } from '../components/ui';
 
 // Steps are keyed rather than numbered: a text blast skips the template, flyer,
@@ -41,7 +53,29 @@ function segmentsOf(body: string): { characters: number; segments: number; unico
   return { characters, segments, unicode };
 }
 
+/** The repeat rule in the shape the API stores it. */
+function repeatPayload(repeat: Repeat) {
+  return {
+    repeat_interval: repeat.interval,
+    repeat_every: repeat.every,
+    repeat_days: repeat.days,
+    repeat_day_of_month: repeat.dayOfMonth,
+    repeat_until: repeat.until,
+    repeat_count: repeat.count,
+  };
+}
+
 type Template = { id: number; name: string; description: string; subject: string; blocks: Block[] };
+
+type Group = {
+  id: number;
+  name: string;
+  description: string;
+  color: string;
+  member_count: string;
+  emailable_count: string;
+  textable_count: string;
+};
 
 export default function CampaignWizard() {
   const [step, setStep] = useState(0);
@@ -57,9 +91,12 @@ export default function CampaignWizard() {
   const [flyer, setFlyer] = useState<{ path: string; name: string; kind: string } | null>(null);
   const [testMode, setTestMode] = useState(false);
   const [testEmail, setTestEmail] = useState('');
-  const [startChoice, setStartChoice] = useState('today');
-  const [startDate, setStartDate] = useState('');
+  const [startDate, setStartDate] = useState(() => todayIso());
   const [sendTime, setSendTime] = useState('09:00');
+  const [repeat, setRepeat] = useState<Repeat>(NO_REPEAT);
+  const [endMode, setEndMode] = useState<'never' | 'count' | 'until'>('never');
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [groupIds, setGroupIds] = useState<number[]>([]);
   const [preview, setPreview] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -75,6 +112,10 @@ export default function CampaignWizard() {
       .get<{ templates: Template[] }>('/api/templates')
       .then((data) => setTemplates(data.templates))
       .catch(() => undefined);
+    api
+      .get<{ groups: Group[] }>('/api/groups')
+      .then((data) => setGroups(data.groups))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -83,16 +124,56 @@ export default function CampaignWizard() {
       .post('/api/campaigns/preview', {
         audience,
         audience_days: audienceDays,
+        group_ids: groupIds,
         test_mode: testMode,
         blocks,
         subject,
         channel,
         sms_body: smsBody,
         flyer_path: flyer?.path,
+        start_date: startDate,
+        ...repeatPayload(repeat),
       })
       .then(setPreview)
       .catch((err) => toast.push('error', errorText(err)));
   }, [step, current]);
+
+  /**
+   * Switching to a repeat fills in the obvious rule from the day already
+   * chosen — every week on that weekday, every month on that date — so the
+   * calendar shows something sensible before anything else is touched.
+   */
+  const setRepeatInterval = (interval: RepeatInterval) => {
+    setRepeat((r) => {
+      if (interval === 'none') return NO_REPEAT;
+      return {
+        ...r,
+        interval,
+        every: 1,
+        days: interval === 'weekly' ? (r.days.length ? r.days : [weekday(startDate)]) : [],
+        dayOfMonth: interval === 'monthly' ? r.dayOfMonth ?? parseInt(startDate.slice(8, 10), 10) : null,
+      };
+    });
+  };
+
+  const toggleWeekday = (day: number) =>
+    setRepeat((r) => ({
+      ...r,
+      days: r.days.includes(day) ? r.days.filter((d) => d !== day) : [...r.days, day].sort((a, b) => a - b),
+    }));
+
+  const setEnd = (mode: 'never' | 'count' | 'until') => {
+    setEndMode(mode);
+    // Only one ending can apply, so choosing one clears the other.
+    setRepeat((r) => ({
+      ...r,
+      count: mode === 'count' ? r.count ?? 6 : null,
+      until: mode === 'until' ? r.until : null,
+    }));
+  };
+
+  const toggleGroup = (id: number) =>
+    setGroupIds((list) => (list.includes(id) ? list.filter((g) => g !== id) : [...list, id]));
 
   const chooseTemplate = (template: Template) => {
     setTemplateId(template.id);
@@ -129,15 +210,17 @@ export default function CampaignWizard() {
         blocks,
         audience,
         audience_days: audienceDays,
+        group_ids: groupIds,
         test_mode: testMode,
         test_email: testEmail || null,
-        start_date: startChoice === 'date' ? startDate : null,
+        start_date: startDate || null,
         send_time: sendTime,
         channel,
         sms_body: smsBody,
         flyer_path: flyer?.path ?? null,
         flyer_name: flyer?.name ?? null,
         flyer_kind: flyer?.kind ?? null,
+        ...repeatPayload(repeat),
       });
       await api.post(`/api/campaigns/${created.campaign.id}/start`);
       toast.push('success', isSms ? 'Text blast started.' : 'Campaign started. The system takes it from here.');
@@ -163,6 +246,7 @@ export default function CampaignWizard() {
         blocks,
         audience,
         audience_days: audienceDays,
+        group_ids: groupIds,
         channel,
         sms_body: smsBody,
         flyer_path: flyer?.path ?? null,
@@ -178,13 +262,18 @@ export default function CampaignWizard() {
 
   const canContinue: Record<StepKey, boolean> = {
     name: name.trim().length > 0,
-    customers: true,
+    customers: audience !== 'group' || groupIds.length > 0,
     template: blocks.length > 0,
     flyer: true,
     subject: subject.trim().length > 0,
     email: blocks.length > 0,
     message: smsBody.trim().length > 0,
-    schedule: !testMode || testEmail.trim().length > 0,
+    schedule:
+      (!testMode || testEmail.trim().length > 0) &&
+      startDate.length === 10 &&
+      (repeat.interval !== 'weekly' || repeat.days.length > 0) &&
+      (endMode !== 'until' || !!repeat.until) &&
+      (endMode !== 'count' || !!repeat.count),
     review: true,
   };
 
@@ -297,6 +386,54 @@ export default function CampaignWizard() {
               label="Customers not emailed recently"
               description="Give people a rest between campaigns."
             />
+            <Radio
+              checked={audience === 'group'}
+              onChange={() => setAudience('group')}
+              label="Specific customer groups"
+              description="Lists you have put together yourself, on the Customer groups page."
+            />
+            {audience === 'group' && (
+              <div className="space-y-2 rounded-xl2 border border-line bg-ink p-4">
+                {groups.length === 0 ? (
+                  <p className="text-sm text-muted">
+                    You have not made any groups yet. Open Customer groups in the menu to create one —
+                    contract holders, commercial accounts, one town — then come back here.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm text-soft">Pick one or more. Someone in two groups is still sent to once.</p>
+                    {groups.map((group) => {
+                      const reachable = Number(isSms ? group.textable_count : group.emailable_count);
+                      return (
+                        <button
+                          key={group.id}
+                          type="button"
+                          onClick={() => toggleGroup(group.id)}
+                          className={`flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors ${
+                            groupIds.includes(group.id)
+                              ? 'border-accent bg-accent/5'
+                              : 'border-line bg-panel hover:border-[#33414F]'
+                          }`}
+                        >
+                          <span>
+                            <span className="block text-sm font-medium text-white">{group.name}</span>
+                            {group.description && (
+                              <span className="mt-0.5 block text-xs text-muted">{group.description}</span>
+                            )}
+                          </span>
+                          <Badge tone={reachable > 0 ? 'green' : 'grey'}>
+                            {formatNumber(reachable)} {isSms ? 'textable' : 'emailable'}
+                          </Badge>
+                        </button>
+                      );
+                    })}
+                    {groupIds.length === 0 && (
+                      <p className="text-xs text-warn">Choose at least one group to continue.</p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             {audience === 'not_in_days' && (
               <Field label="Not emailed in the last" className="max-w-[200px]">
                 <Select value={audienceDays} onChange={(e) => setAudienceDays(parseInt(e.target.value, 10))}>
@@ -431,43 +568,194 @@ export default function CampaignWizard() {
         )}
 
         {current === 'schedule' && (
-          <div className="space-y-4">
-            <div className="space-y-3">
-              <Radio checked={startChoice === 'today'} onChange={() => setStartChoice('today')} label="Start today" />
-              <Radio
-                checked={startChoice === 'tomorrow'}
-                onChange={() => {
-                  setStartChoice('tomorrow');
-                  const d = new Date();
-                  d.setDate(d.getDate() + 1);
-                  setStartDate(d.toISOString().slice(0, 10));
-                }}
-                label="Start tomorrow"
-              />
-              <Radio checked={startChoice === 'date'} onChange={() => setStartChoice('date')} label="Choose a date" />
-              {startChoice === 'date' && (
-                <Field label="First sending day" className="max-w-[220px]">
-                  <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-                </Field>
+          <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+            <div className="space-y-5">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-white">How often should this go out?</p>
+                  <HelpTip>
+                    A repeating campaign goes through the whole audience again on each sending day. People
+                    added to your list — or to the group — between sends are included next time.
+                  </HelpTip>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(
+                    [
+                      ['none', 'Once', 'Send this campaign one time.'],
+                      ['daily', 'Every day', 'A short run, day after day.'],
+                      ['weekly', 'Every week', 'On the weekdays you choose.'],
+                      ['monthly', 'Every month', 'On the same date each month.'],
+                    ] as [RepeatInterval, string, string][]
+                  ).map(([value, label, description]) => (
+                    <Radio
+                      key={value}
+                      checked={repeat.interval === value}
+                      onChange={() => setRepeatInterval(value)}
+                      label={label}
+                      description={description}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {isRecurring(repeat) && (
+                <div className="space-y-4 rounded-xl2 border border-line bg-ink p-4">
+                  <div className="flex flex-wrap items-end gap-3">
+                    <Field label="Repeat every" className="w-[120px]">
+                      <Select
+                        value={repeat.every}
+                        onChange={(e) =>
+                          setRepeat((r) => ({ ...r, every: parseInt(e.target.value, 10) }))
+                        }
+                      >
+                        {[1, 2, 3, 4, 6, 8, 12].map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <p className="pb-3 text-sm text-soft">
+                      {repeat.interval === 'daily' ? 'day' : repeat.interval === 'weekly' ? 'week' : 'month'}
+                      {repeat.every === 1 ? '' : 's'}
+                    </p>
+                  </div>
+
+                  {repeat.interval === 'weekly' && (
+                    <div>
+                      <p className="mb-1.5 text-sm font-medium text-soft">On these days</p>
+                      <div className="flex flex-wrap gap-2">
+                        {WEEKDAYS.map((day) => {
+                          const on = repeat.days.includes(day.value);
+                          return (
+                            <button
+                              key={day.value}
+                              type="button"
+                              onClick={() => toggleWeekday(day.value)}
+                              className={`h-10 w-12 rounded-lg border text-xs font-semibold transition-colors ${
+                                on
+                                  ? 'border-accent bg-accent text-accent-text'
+                                  : 'border-line bg-panel text-soft hover:border-[#33414F] hover:text-white'
+                              }`}
+                            >
+                              {day.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {repeat.days.length === 0 && (
+                        <p className="mt-1.5 text-xs text-warn">Pick at least one day of the week.</p>
+                      )}
+                    </div>
+                  )}
+
+                  {repeat.interval === 'monthly' && (
+                    <Field
+                      label="On day of the month"
+                      hint="The 29th, 30th and 31st fall back to the last day in shorter months."
+                      className="max-w-[160px]"
+                    >
+                      <Select
+                        value={repeat.dayOfMonth ?? (parseInt(startDate.slice(8, 10), 10) || 1)}
+                        onChange={(e) =>
+                          setRepeat((r) => ({ ...r, dayOfMonth: parseInt(e.target.value, 10) }))
+                        }
+                      >
+                        {Array.from({ length: 31 }, (_, i) => i + 1).map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  )}
+
+                  <div className="space-y-2 border-t border-line pt-4">
+                    <p className="text-sm font-medium text-soft">Keep repeating</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(
+                        [
+                          ['never', 'Until I stop it'],
+                          ['count', 'For a set number of sends'],
+                          ['until', 'Until a date'],
+                        ] as ['never' | 'count' | 'until', string][]
+                      ).map(([mode, label]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setEnd(mode)}
+                          className={`rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                            endMode === mode
+                              ? 'border-accent bg-accent/10 text-accent'
+                              : 'border-line bg-panel text-soft hover:border-[#33414F] hover:text-white'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    {endMode === 'count' && (
+                      <Field label="Number of sends" className="max-w-[160px]">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={365}
+                          value={repeat.count ?? ''}
+                          onChange={(e) =>
+                            setRepeat((r) => ({
+                              ...r,
+                              count: e.target.value ? Math.max(1, parseInt(e.target.value, 10)) : null,
+                            }))
+                          }
+                        />
+                      </Field>
+                    )}
+                    {endMode === 'until' && (
+                      <Field label="Last possible send day" className="max-w-[220px]">
+                        <Input
+                          type="date"
+                          min={startDate}
+                          value={repeat.until ?? ''}
+                          onChange={(e) => setRepeat((r) => ({ ...r, until: e.target.value || null }))}
+                        />
+                      </Field>
+                    )}
+                  </div>
+                </div>
               )}
-            </div>
 
-            <Field label="Sending starts at" className="max-w-[220px]">
-              <Input type="time" value={sendTime} onChange={(e) => setSendTime(e.target.value)} />
-            </Field>
-
-            <div className="rounded-xl2 border border-line bg-ink p-4">
-              <Toggle checked={testMode} onChange={setTestMode} label="Test mode — send only to one address" />
-              {testMode && (
-                <Field label={isSms ? 'Test number' : 'Test address'} className="mt-3 max-w-sm">
+              <div className="flex flex-wrap gap-4 border-t border-line pt-5">
+                <Field label="First sending day" className="max-w-[220px]">
                   <Input
-                    type={isSms ? 'tel' : 'email'}
-                    value={testEmail}
-                    onChange={(e) => setTestEmail(e.target.value)}
-                    placeholder={isSms ? '+1 212 687 9116' : 'david@hulkautomation.com'}
+                    type="date"
+                    min={todayIso()}
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
                   />
                 </Field>
-              )}
+                <Field label="Sending starts at" className="max-w-[220px]">
+                  <Input type="time" value={sendTime} onChange={(e) => setSendTime(e.target.value)} />
+                </Field>
+              </div>
+
+              <div className="rounded-xl2 border border-line bg-ink p-4">
+                <Toggle checked={testMode} onChange={setTestMode} label="Test mode — send only to one address" />
+                {testMode && (
+                  <Field label={isSms ? 'Test number' : 'Test address'} className="mt-3 max-w-sm">
+                    <Input
+                      type={isSms ? 'tel' : 'email'}
+                      value={testEmail}
+                      onChange={(e) => setTestEmail(e.target.value)}
+                      placeholder={isSms ? '+1 212 687 9116' : 'david@hulkautomation.com'}
+                    />
+                  </Field>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <SendCalendar repeat={repeat} startDate={startDate} onPickDate={setStartDate} />
+              <p className="text-sm text-soft">{describeRepeat(repeat, startDate)}</p>
             </div>
           </div>
         )}
@@ -484,6 +772,35 @@ export default function CampaignWizard() {
                 value={formatNumber(preview?.recipients ?? 0)}
                 hint={isSms ? 'Only customers with a number and texting consent are counted.' : undefined}
               />
+              <Summary
+                label="Schedule"
+                value={preview?.repeatDescription ?? describeRepeat(repeat, startDate)}
+                hint="A repeating campaign sends to the whole audience again on each of these days."
+              />
+              <Summary label="First send" value={`${startDate} at ${sendTime}`} />
+              {audience === 'group' && (
+                <Summary
+                  label="Groups"
+                  value={
+                    (preview?.groups ?? []).map((g: { name: string }) => g.name).join(', ') ||
+                    groups
+                      .filter((g) => groupIds.includes(g.id))
+                      .map((g) => g.name)
+                      .join(', ')
+                  }
+                />
+              )}
+              {isRecurring(repeat) && (
+                <Summary
+                  label={isSms ? 'Texts across the schedule' : 'Emails across the schedule'}
+                  value={
+                    repeat.count || repeat.until
+                      ? formatNumber(preview?.totalSends ?? 0)
+                      : `${formatNumber(preview?.recipients ?? 0)} every send, ongoing`
+                  }
+                  hint="Each repeat is a full send to the audience, so this is what it adds up to."
+                />
+              )}
               <Summary
                 label="Daily limit"
                 value={`${preview?.dailyLimit ?? 99} ${isSms ? 'texts' : 'emails'} per day`}
@@ -524,6 +841,25 @@ export default function CampaignWizard() {
                   Nobody in this audience has both a phone number and texting consent, so this blast
                   would reach no one. Mark who has agreed on the Customers page first.
                 </p>
+              </div>
+            )}
+
+            {isRecurring(repeat) && (
+              <div className="grid gap-4 sm:grid-cols-[320px_1fr] sm:items-start">
+                <SendCalendar repeat={repeat} startDate={startDate} />
+                <div className="rounded-xl2 border border-line bg-ink p-4 text-sm">
+                  <p className="font-medium text-white">This campaign repeats</p>
+                  <p className="mt-1 text-muted">
+                    It sends on each highlighted day at {sendTime}, to whoever matches the audience on
+                    that day. You can pause or cancel it at any point from the campaign page.
+                  </p>
+                  <ul className="mt-3 space-y-1 text-xs text-soft">
+                    {occurrencesFrom(repeat, startDate, 4).map((date) => (
+                      <li key={date}>{date}</li>
+                    ))}
+                    {!repeat.count && !repeat.until && <li className="text-muted">…and onwards</li>}
+                  </ul>
+                </div>
               </div>
             )}
 

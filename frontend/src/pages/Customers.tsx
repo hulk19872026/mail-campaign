@@ -17,6 +17,8 @@ import {
   useToast,
 } from '../components/ui';
 
+type Group = { id: number; name: string; color: string; member_count: string };
+
 type Customer = {
   id: number;
   first_name: string;
@@ -32,6 +34,7 @@ type Customer = {
   last_texted_at: string | null;
   wave_customer_id: string | null;
   campaigns_sent: string;
+  groups: { id: number; name: string; color: string }[];
 };
 
 export default function Customers() {
@@ -40,6 +43,9 @@ export default function Customers() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
+  const [groupFilter, setGroupFilter] = useState(0);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [bulkGroup, setBulkGroup] = useState(0);
   const [sort, setSort] = useState('name');
   const [selected, setSelected] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,7 +61,8 @@ export default function Customers() {
     setError('');
     api
       .get<{ customers: Customer[]; total: number }>(
-        `/api/customers?search=${encodeURIComponent(search)}&status=${status}&sort=${sort}&page=${page}`
+        `/api/customers?search=${encodeURIComponent(search)}&status=${status}&sort=${sort}&page=${page}` +
+          (groupFilter ? `&group=${groupFilter}` : '')
       )
       .then((data) => {
         setCustomers(data.customers);
@@ -68,7 +75,17 @@ export default function Customers() {
   useEffect(() => {
     const timer = setTimeout(load, search ? 300 : 0);
     return () => clearTimeout(timer);
-  }, [search, status, sort, page]);
+  }, [search, status, sort, page, groupFilter]);
+
+  const loadGroups = () =>
+    api
+      .get<{ groups: Group[] }>('/api/groups')
+      .then((data) => setGroups(data.groups))
+      .catch(() => undefined);
+
+  useEffect(() => {
+    loadGroups();
+  }, []);
 
   const bulk = async (action: string) => {
     if (action === 'delete' && !confirm(`Delete ${selected.length} customers? This cannot be undone.`)) return;
@@ -83,11 +100,16 @@ export default function Customers() {
       )
     )
       return;
+    if ((action === 'add_to_group' || action === 'remove_from_group') && !bulkGroup) {
+      toast.push('error', 'Choose a group first.');
+      return;
+    }
     try {
-      await api.post('/api/customers/bulk', { ids: selected, action });
+      await api.post('/api/customers/bulk', { ids: selected, action, group_id: bulkGroup || undefined });
       toast.push('success', `${selected.length} customers updated.`);
       setSelected([]);
       load();
+      if (action === 'add_to_group' || action === 'remove_from_group') loadGroups();
     } catch (err) {
       toast.push('error', errorText(err));
     }
@@ -171,6 +193,21 @@ export default function Customers() {
             <option value="sms_ready">Can be texted</option>
             <option value="sms_missing">Has a phone, no texting consent</option>
           </Select>
+          <Select
+            value={groupFilter}
+            onChange={(e) => {
+              setPage(1);
+              setGroupFilter(parseInt(e.target.value, 10));
+            }}
+            className="w-auto"
+          >
+            <option value={0}>All groups</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} ({g.member_count})
+              </option>
+            ))}
+          </Select>
           <Select value={sort} onChange={(e) => setSort(e.target.value)} className="w-auto">
             <option value="name">Sort by name</option>
             <option value="company">Sort by company</option>
@@ -200,6 +237,28 @@ export default function Customers() {
             <Button size="sm" variant="danger" onClick={() => bulk('delete')}>
               Delete
             </Button>
+            {groups.length > 0 && (
+              <span className="flex items-center gap-2 border-l border-line pl-2">
+                <Select
+                  value={bulkGroup}
+                  onChange={(e) => setBulkGroup(parseInt(e.target.value, 10))}
+                  className="w-auto py-1.5 text-[13px]"
+                >
+                  <option value={0}>Choose a group…</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </Select>
+                <Button size="sm" onClick={() => bulk('add_to_group')}>
+                  Add to group
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => bulk('remove_from_group')}>
+                  Remove
+                </Button>
+              </span>
+            )}
           </div>
         )}
 
@@ -267,7 +326,21 @@ export default function Customers() {
                           {fullName(c)}
                         </button>
                       </td>
-                      <td className="px-3 py-3 text-muted">{c.company_name || '—'}</td>
+                      <td className="px-3 py-3 text-muted">
+                        <span className="block">{c.company_name || '—'}</span>
+                        {c.groups?.length > 0 && (
+                          <span className="mt-1 flex flex-wrap gap-1">
+                            {c.groups.map((g) => (
+                              <span
+                                key={g.id}
+                                className="rounded-full border border-line bg-raised px-2 py-0.5 text-[11px] text-soft"
+                              >
+                                {g.name}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-3 text-muted">{c.email}</td>
                       <td className="px-3 py-3 text-muted">{c.phone || '—'}</td>
                       <td className="px-3 py-3">
@@ -317,6 +390,18 @@ export default function Customers() {
                   <p className="text-xs text-muted">
                     {c.phone || 'No phone'} · Last email {formatDate(c.last_emailed_at)}
                   </p>
+                  {c.groups?.length > 0 && (
+                    <p className="mt-1.5 flex flex-wrap gap-1">
+                      {c.groups.map((g) => (
+                        <span
+                          key={g.id}
+                          className="rounded-full border border-line bg-raised px-2 py-0.5 text-[11px] text-soft"
+                        >
+                          {g.name}
+                        </span>
+                      ))}
+                    </p>
+                  )}
                   <div className="mt-3 flex gap-2">
                     <Button size="sm" onClick={() => setEditing(c)}>
                       Edit

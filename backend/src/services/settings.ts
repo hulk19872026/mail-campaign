@@ -31,6 +31,10 @@ export type AppSettings = {
    * correcting it should not need an environment variable edit and a redeploy.
    */
   wave_business_id: string;
+  /** Pull the customer list from Wave once a night, without anyone pressing a button. */
+  wave_sync_enabled: boolean;
+  /** HH:mm, 24h, in the timezone above. Overnight, so the list is fresh before sending. */
+  wave_sync_time: string;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -54,6 +58,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   logo_url: '',
   accent_color: '#22C55E',
   wave_business_id: env.WAVE_BUSINESS_ID,
+  wave_sync_enabled: true,
+  wave_sync_time: '02:00',
 };
 
 const KEY = 'app';
@@ -69,6 +75,7 @@ export async function getSettings(force = false): Promise<AppSettings> {
   value.sms_daily_limit = clamp(num(value.sms_daily_limit, 99), 1, 500);
   value.batch_size = clamp(num(value.batch_size, 10), 1, 50);
   value.batch_delay_seconds = clamp(num(value.batch_delay_seconds, 30), 0, 3600);
+  value.wave_sync_time = time(value.wave_sync_time, '02:00');
   cache = { value, at: Date.now() };
   return value;
 }
@@ -87,6 +94,12 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<AppSett
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
+}
+
+/** A stored time that is not HH:mm would silently become midnight, so it is rejected. */
+function time(value: any, fallback: string): string {
+  const text = String(value ?? '');
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(text) ? text : fallback;
 }
 
 /** Zero is a legitimate setting, so `||` would be wrong here. */

@@ -155,6 +155,38 @@ export default function SettingsPage() {
       </Card>
 
       <Card>
+        <SectionTitle
+          title="Customer sync"
+          subtitle="Keeping the customer list in step with Wave Accounting."
+        />
+        <div className="flex items-center gap-2">
+          <Toggle
+            checked={settings.wave_sync_enabled}
+            onChange={(v) => setSettings((s: any) => ({ ...s, wave_sync_enabled: v }))}
+            label="Pull customers from Wave every night"
+          />
+          <HelpTip>
+            Customers added in Wave only reach this app when it reads the list. Left on, that happens overnight,
+            so a campaign sending in the morning already knows about them. You can still sync by hand at any time
+            from the Integrations page.
+          </HelpTip>
+        </div>
+        {settings.wave_sync_enabled && (
+          <Field
+            label="Sync runs at"
+            hint="Overnight is best — before the day's sending starts, and when nobody is working in Wave."
+            className="mt-4 max-w-[220px]"
+          >
+            <Input type="time" value={settings.wave_sync_time} onChange={set('wave_sync_time')} />
+          </Field>
+        )}
+        <p className="mt-3 text-xs text-muted">
+          Customers are matched on their Wave ID, so a sync never creates duplicates. A sync you run yourself
+          counts for the day, and the nightly one stands down.
+        </p>
+      </Card>
+
+      <Card>
         <SectionTitle title="Email addresses" subtitle="Your Resend API key stays in Railway and is never shown here." />
         <div className="grid gap-4 sm:grid-cols-3">
           <Field label="From name">

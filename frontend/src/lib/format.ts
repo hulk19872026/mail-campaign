@@ -17,6 +17,22 @@ export function formatDateTime(value?: string | null): string {
   });
 }
 
+/**
+ * A moment shown in the business's own timezone rather than the viewer's.
+ * "Sync runs at 02:00" is a time in the business's day, so the next run has to
+ * be read in the same clock or the two disagree by the offset between them.
+ */
+export function formatDateTimeIn(value?: string | null, timeZone?: string): string {
+  if (!value) return '—';
+  return new Date(value).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    ...(timeZone ? { timeZone } : {}),
+  });
+}
+
 export function formatNumber(value: number | string | null | undefined): string {
   const n = Number(value ?? 0);
   return Number.isFinite(n) ? n.toLocaleString() : '0';

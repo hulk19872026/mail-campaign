@@ -7,6 +7,7 @@ import { audit } from '../services/activity';
 import { getSettings } from '../services/settings';
 import {
   Campaign,
+  flyerOnDisk,
   flyerUrl,
   getCampaign,
   previewAudienceCount,
@@ -116,6 +117,9 @@ campaignsRouter.get(
       dailyLimit: isSms(campaign) ? settings.sms_daily_limit : settings.daily_limit,
       sentToday: await sentToday(settings, isSms(campaign) ? 'sms' : 'email'),
       flyerUrl: flyerUrl(campaign),
+      // So the page can say the flyer needs re-uploading, rather than the first
+      // sign of it being a broken image in a customer's inbox.
+      flyerMissing: Boolean(campaign.flyer_path) && !(await flyerOnDisk(campaign)),
     });
   })
 );

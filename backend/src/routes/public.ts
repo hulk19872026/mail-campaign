@@ -363,6 +363,11 @@ function deployedRevision() {
   };
 }
 
+/** The mount path of the attached Railway volume, or null when there is none. */
+function volumeMount(): string | null {
+  return process.env.RAILWAY_VOLUME_MOUNT_PATH || null;
+}
+
 /**
  * What is actually in the uploads directory. Without a Railway volume mounted
  * at /data this is wiped on every deploy, which shows up only as a broken
@@ -372,9 +377,17 @@ function uploadsState() {
   try {
     const fs = require('fs') as typeof import('fs');
     const files = fs.readdirSync(env.UPLOAD_DIR);
-    return { dir: env.UPLOAD_DIR, files: files.length };
+    // Railway sets this only when a volume is actually attached, so it answers
+    // "will these files survive the next deploy?" rather than just "are they
+    // here now?".
+    return { dir: env.UPLOAD_DIR, files: files.length, volume: volumeMount() };
   } catch (err) {
-    return { dir: env.UPLOAD_DIR, files: null, error: String((err as any)?.message ?? err) };
+    return {
+      dir: env.UPLOAD_DIR,
+      files: null,
+      volume: volumeMount(),
+      error: String((err as any)?.message ?? err),
+    };
   }
 }
 

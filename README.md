@@ -43,8 +43,14 @@ migration step to run.
 
 ### 3. Add a volume for flyers
 
-**Service → Settings → Volumes → Add volume**, mount path `/data`. Without this, uploaded
-flyers disappear on each deploy.
+**Right-click the service → Attach Volume**, mount path `/data` (or `railway volume add
+--mount-path /data`). Without this, uploaded flyers disappear on every deploy: they are written
+to the container's own filesystem, which each deploy replaces, while campaigns go on pointing at
+the filename — the email then shows a broken image.
+
+Confirm it with `/healthz`, which reports `uploads.volume`. A mount path there means the files
+survive deploys; `null` means no volume is attached. Attaching one does not bring back flyers
+already lost, so re-upload those on the campaign.
 
 ### 4. Set the environment variables
 

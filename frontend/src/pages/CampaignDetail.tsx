@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, errorText } from '../lib/api';
 import { formatDateTime, formatNumber, fullName } from '../lib/format';
@@ -27,6 +27,8 @@ export default function CampaignDetail() {
   const [error, setError] = useState('');
   const [testOpen, setTestOpen] = useState(false);
   const [testEmail, setTestEmail] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const flyerInput = useRef<HTMLInputElement>(null);
   const toast = useToast();
   const navigate = useNavigate();
 
@@ -40,6 +42,30 @@ export default function CampaignDetail() {
       .get<{ recipients: any[] }>(`/api/campaigns/${id}/recipients?status=${filter}`)
       .then((r) => setRecipients(r.recipients))
       .catch(() => undefined);
+  };
+
+  /**
+   * Attaching a flyer to a campaign that already exists. The API refuses to
+   * edit a campaign while it is sending, so the button says to pause first
+   * rather than letting the upload fail after the file has gone up.
+   */
+  const uploadFlyer = async (file: File) => {
+    setUploading(true);
+    try {
+      const result = await api.upload<{ path: string; name: string; kind: string }>('/api/uploads', file);
+      await api.put(`/api/campaigns/${id}`, {
+        flyer_path: result.path,
+        flyer_name: result.name,
+        flyer_kind: result.kind,
+      });
+      toast.push('success', 'Flyer uploaded. Send yourself a test to check it.');
+      load();
+    } catch (err) {
+      toast.push('error', errorText(err));
+    } finally {
+      setUploading(false);
+      if (flyerInput.current) flyerInput.current.value = '';
+    }
   };
 
   useEffect(load, [id, filter]);
@@ -216,6 +242,57 @@ export default function CampaignDetail() {
           </div>
         </Card>
       )}
+
+      <Card>
+        <h2 className="mb-1 text-base font-semibold text-white">Flyer</h2>
+        <p className="mb-4 text-sm text-muted">
+          Appears at the top of the email, above the written content.
+        </p>
+
+        <input
+          ref={flyerInput}
+          type="file"
+          accept=".png,.jpg,.jpeg,.pdf"
+          className="hidden"
+          onChange={(e) => e.target.files?.[0] && uploadFlyer(e.target.files[0])}
+        />
+
+        {data.flyerMissing && (
+          <div className="mb-4 rounded-xl2 border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-white">
+            The flyer file <strong>{c.flyer_name || c.flyer_path}</strong> is no longer on the server,
+            so the email would show a broken image. Upload it again below. If this happens after every
+            deploy, the uploads directory needs a Railway volume mounted at <code>/data</code>.
+          </div>
+        )}
+
+        {c.flyer_path && !data.flyerMissing && (
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-line bg-ink px-4 py-3">
+            <span className="text-sm text-white">{c.flyer_name || c.flyer_path}</span>
+            <Badge tone="green">On the server</Badge>
+            {data.flyerUrl && (
+              <a href={data.flyerUrl} target="_blank" rel="noreferrer" className="text-sm text-accent underline">
+                Open it
+              </a>
+            )}
+          </div>
+        )}
+
+        {!c.flyer_path && (
+          <p className="mb-4 text-sm text-muted">No flyer on this campaign yet.</p>
+        )}
+
+        {['active', 'completed'].includes(c.status) ? (
+          <p className="text-sm text-muted">
+            {c.status === 'completed'
+              ? 'This campaign has finished sending, so changing its flyer would not reach anyone.'
+              : 'Pause the campaign to change its flyer — an email cannot be edited while it is sending.'}
+          </p>
+        ) : (
+          <Button loading={uploading} onClick={() => flyerInput.current?.click()}>
+            {c.flyer_path ? 'Replace the flyer' : 'Upload a flyer'}
+          </Button>
+        )}
+      </Card>
 
       <Card padded={false}>
         <div className="flex flex-wrap items-center gap-2 border-b border-line p-4">

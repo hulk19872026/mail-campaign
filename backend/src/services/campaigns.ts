@@ -187,6 +187,16 @@ export async function startCampaign(id: number, actor: string): Promise<Campaign
       throw new AppError('Set a "from" address in Settings → Email before sending.', 400);
   }
 
+  // Better to stop here than to send the whole list a broken image.
+  if (campaign.flyer_path && !(await flyerOnDisk(campaign))) {
+    throw new AppError(
+      'The flyer file is no longer on the server, so this campaign would send a broken image. ' +
+        'Re-upload the flyer on the campaign. If this keeps happening after each deploy, the ' +
+        'uploads directory needs a Railway volume mounted at /data.',
+      400
+    );
+  }
+
   const total = await materializeRecipients(campaign);
   if (total === 0)
     throw new AppError(
@@ -227,6 +237,40 @@ export async function setCampaignStatus(
 export function flyerUrl(campaign: Campaign): string | null {
   if (!campaign.flyer_path) return null;
   return `${env.APP_URL}/uploads/${campaign.flyer_path}`;
+}
+
+/**
+ * Whether the uploaded flyer is still on disk.
+ *
+ * UPLOAD_DIR lives in the container's filesystem, so without a Railway volume
+ * mounted there every deploy replaces it and the uploaded files are gone. The
+ * campaign still remembers the filename, so the email keeps pointing at a URL
+ * that now returns 404 — which arrives as a broken image rather than an error
+ * anyone would see. Checking first means the email can leave the flyer out
+ * instead of showing a broken one.
+ */
+export async function flyerOnDisk(campaign: Pick<Campaign, 'flyer_path'>): Promise<boolean> {
+  if (!campaign.flyer_path) return false;
+  try {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    await fs.access(path.join(env.UPLOAD_DIR, campaign.flyer_path));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The flyer URL, but only when the file behind it is actually there. */
+async function usableFlyerUrl(campaign: Campaign): Promise<string | null> {
+  if (!campaign.flyer_path) return null;
+  if (await flyerOnDisk(campaign)) return flyerUrl(campaign);
+  log.warn('Flyer file is missing from the uploads directory', {
+    campaign: campaign.id,
+    file: campaign.flyer_path,
+    uploadDir: env.UPLOAD_DIR,
+  });
+  return null;
 }
 
 type RecipientRow = {
@@ -438,7 +482,7 @@ async function sendEmailToRecipient(
     },
     campaignId: campaign.id,
     recipientId: recipient.id,
-    flyerUrl: flyerUrl(campaign),
+    flyerUrl: await usableFlyerUrl(campaign),
     tracking: true,
   };
 
@@ -699,7 +743,7 @@ export async function sendTestEmail(campaignId: number, address: string): Promis
     },
     campaignId: campaign.id,
     recipientId: null,
-    flyerUrl: flyerUrl(campaign),
+    flyerUrl: await usableFlyerUrl(campaign),
     tracking: false,
   };
   const { html, text } = renderEmail(campaign.blocks ?? [], ctx);

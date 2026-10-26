@@ -363,6 +363,21 @@ function deployedRevision() {
   };
 }
 
+/**
+ * What is actually in the uploads directory. Without a Railway volume mounted
+ * at /data this is wiped on every deploy, which shows up only as a broken
+ * flyer image in a delivered email — so it is worth being able to see.
+ */
+function uploadsState() {
+  try {
+    const fs = require('fs') as typeof import('fs');
+    const files = fs.readdirSync(env.UPLOAD_DIR);
+    return { dir: env.UPLOAD_DIR, files: files.length };
+  } catch (err) {
+    return { dir: env.UPLOAD_DIR, files: null, error: String((err as any)?.message ?? err) };
+  }
+}
+
 publicRouter.get('/healthz', async (_req, res) => {
   try {
     await query('SELECT 1');
@@ -375,6 +390,8 @@ publicRouter.get('/healthz', async (_req, res) => {
       status: 'ok',
       database: databaseTarget(),
       accounts: Number(count),
+      appUrl: env.APP_URL,
+      uploads: uploadsState(),
       ...deployedRevision(),
       time: new Date().toISOString(),
     });

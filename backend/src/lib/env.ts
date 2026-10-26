@@ -62,6 +62,31 @@ export const env = {
   SMS_NUMBER: process.env.SMS_NUMBER ?? '+12126879116',
 };
 
+/**
+ * Whether UPLOAD_DIR actually sits inside the mounted volume.
+ *
+ * A volume mounted at a path that merely looks like the upload directory keeps
+ * the wrong directory: `/DATA` and `/data` are two different places on Linux,
+ * and the one being persisted is not the one flyers are written to. Nothing
+ * reports that — uploads simply vanish on the next deploy — so it is checked
+ * here, where it can be said out loud.
+ */
+export function uploadsArePersisted(): boolean | null {
+  const mount = process.env.RAILWAY_VOLUME_MOUNT_PATH;
+  if (!mount) return null; // no volume attached at all
+  const base = mount.replace(/\/+$/, '');
+  return env.UPLOAD_DIR === base || env.UPLOAD_DIR.startsWith(`${base}/`);
+}
+
+if (uploadsArePersisted() === false) {
+  log.warn(
+    `UPLOAD_DIR is ${env.UPLOAD_DIR} but the volume is mounted at ` +
+      `${process.env.RAILWAY_VOLUME_MOUNT_PATH}, so uploaded flyers are NOT on the volume and will ` +
+      'be lost on the next deploy. Mount paths are case-sensitive. Set the volume mount path to ' +
+      `${env.UPLOAD_DIR} or a directory above it.`
+  );
+}
+
 if (isProdEnv() && /localhost|127\.0\.0\.1/.test(env.APP_URL)) {
   // Every flyer image, tracking pixel, click link and unsubscribe link is built
   // from APP_URL. Left at the default, they all point at the container itself,

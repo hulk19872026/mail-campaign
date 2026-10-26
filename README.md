@@ -48,7 +48,10 @@ migration step to run.
 to the container's own filesystem, which each deploy replaces, while campaigns go on pointing at
 the filename — the email then shows a broken image.
 
-Confirm it with `/healthz`, which reports `uploads.volume`. A mount path there means the files
+The path is **case-sensitive**: a volume mounted at `/DATA` persists a directory nothing writes
+to, while the flyers in `/data/uploads` are still wiped on every deploy.
+
+Confirm it with `/healthz`, which reports `uploads.volume` and `uploads.persisted`. A mount path there means the files
 survive deploys; `null` means no volume is attached. Attaching one does not bring back flyers
 already lost, so re-upload those on the campaign.
 

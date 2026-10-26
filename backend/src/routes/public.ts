@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { databaseTarget, one, query } from '../lib/db';
-import { env } from '../lib/env';
+import { env, uploadsArePersisted } from '../lib/env';
 import { verifyToken } from '../lib/tokens';
 import { handler } from '../lib/http';
 import { log } from '../lib/logger';
@@ -380,12 +380,13 @@ function uploadsState() {
     // Railway sets this only when a volume is actually attached, so it answers
     // "will these files survive the next deploy?" rather than just "are they
     // here now?".
-    return { dir: env.UPLOAD_DIR, files: files.length, volume: volumeMount() };
+    return { dir: env.UPLOAD_DIR, files: files.length, volume: volumeMount(), persisted: uploadsArePersisted() };
   } catch (err) {
     return {
       dir: env.UPLOAD_DIR,
       files: null,
       volume: volumeMount(),
+      persisted: uploadsArePersisted(),
       error: String((err as any)?.message ?? err),
     };
   }

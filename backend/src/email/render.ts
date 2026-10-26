@@ -168,9 +168,31 @@ function buttonAnchor(block: Extract<Block, { type: 'button' }>, ctx: RenderCont
   )}</a>`;
 }
 
+/**
+ * Where the "Text us" button points.
+ *
+ * Not at `sms:` directly: Gmail strips the href off any sms: link, in the web
+ * client and both mobile apps, which leaves a button that is not a link at all.
+ * It is pointed at a page on this app instead — an https link Gmail keeps — and
+ * that page hands off to the messaging app. The signed token carries who
+ * clicked, so the tap is recorded as a lead on the way through.
+ */
+function textUsUrl(block: Extract<Block, { type: 'textus' }>, ctx: RenderContext): string | null {
+  const number = textNumber(block, ctx);
+  if (!smsHref(number)) return null;
+  const token = signToken({
+    r: ctx.recipientId ?? null,
+    c: ctx.campaignId ?? null,
+    u: ctx.customer.id ?? null,
+    n: number,
+    m: personalize(block.message || '', ctx),
+  });
+  return `${env.APP_URL}/text/${token}`;
+}
+
 /** The "Text us" button, or null when no number is configured to text. */
 function textUsAnchor(block: Extract<Block, { type: 'textus' }>, ctx: RenderContext): string | null {
-  const href = smsHref(textNumber(block, ctx), personalize(block.message || '', ctx));
+  const href = textUsUrl(block, ctx);
   if (!href) return null;
   return `<a href="${escapeHtml(
     href

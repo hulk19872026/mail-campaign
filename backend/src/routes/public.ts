@@ -9,7 +9,7 @@ import { verifyResendWebhook } from '../services/resend';
 import { normalizePhone, phoneKeySql, verifyTwilioWebhook } from '../services/twilio';
 import { suppressNumber } from '../services/campaigns';
 import { audit, notify } from '../services/activity';
-import { escapeHtml } from '../email/render';
+import { escapeHtml, formatPhone, smsHref } from '../email/render';
 
 export const publicRouter = Router();
 
@@ -86,6 +86,99 @@ publicRouter.get(
           'success',
           'New maintenance lead',
           `${[customer?.first_name, customer?.last_name].filter(Boolean).join(' ') || customer?.company_name || 'A customer'} clicked "${payload.i}".`
+        );
+      }
+    }
+  })
+);
+
+/* --------------------------------- text us -------------------------------- */
+
+/**
+ * The page behind the email's "Text us" button.
+ *
+ * Gmail removes the href from an sms: link, so the button cannot point straight
+ * at the messaging app. It points here instead, and this page does the handoff:
+ * a phone follows the sms: link and lands in Messages with the number and
+ * message filled in, while a desktop browser — which has nothing to hand off
+ * to — simply shows the number to text from a phone.
+ */
+function textUsPage(company: string, number: string, message: string): string {
+  const href = smsHref(number, message);
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Text ${escapeHtml(company)}</title>
+<style>
+  body{margin:0;background:#0b0f14;color:#e8eaed;font:400 16px/1.6 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+  .card{background:#141a21;border:1px solid #202a35;border-radius:16px;padding:32px;max-width:460px;width:100%;text-align:center}
+  h1{margin:0 0 8px;font-size:22px;letter-spacing:-0.3px}
+  p{margin:0 0 18px;color:#9aa5b1}
+  .num{display:block;margin:0 0 20px;font-size:28px;font-weight:700;color:#fff;text-decoration:none;letter-spacing:-0.5px}
+  a.btn{display:inline-block;background:#22C55E;color:#08120b;border-radius:10px;padding:14px 24px;
+        font-size:16px;font-weight:700;text-decoration:none}
+  .hint{margin-top:18px;font-size:13px;color:#6b7280}
+</style></head><body><div class="card">
+  <h1>Text ${escapeHtml(company)}</h1>
+  <p>Opening your messages app&hellip;</p>
+  <a class="num" href="${escapeHtml(href)}">${escapeHtml(formatPhone(number))}</a>
+  <a class="btn" href="${escapeHtml(href)}">Open my messages app</a>
+  <p class="hint">On a computer this cannot open a text for you — send a message to the number above
+     from your phone, or just reply to the email.</p>
+</div>
+<script>
+  // A phone lands in Messages straight away; a desktop browser ignores this and
+  // the number above stays on screen.
+  setTimeout(function () { window.location.href = ${JSON.stringify(href)}; }, 150);
+</script>
+</body></html>`;
+}
+
+publicRouter.get(
+  '/text/:token?',
+  handler(async (req, res) => {
+    const settings = await getSettings();
+    const payload = verifyToken<{
+      r?: number | null;
+      c?: number | null;
+      u?: number | null;
+      n?: string;
+      m?: string;
+    }>(String(req.params.token ?? ''));
+
+    const number = payload?.n || settings.sms_number || settings.support_phone || '';
+    res.send(textUsPage(settings.company_name, number, payload?.m ?? ''));
+
+    // Tapping "Text us" is a strong signal, so it is recorded the same way a
+    // click on the main call to action is.
+    if (!payload?.r) return;
+    await query(
+      `UPDATE campaign_recipients SET clicked_at = COALESCE(clicked_at, now()) WHERE id = $1`,
+      [payload.r]
+    );
+    await query(
+      `INSERT INTO email_events (campaign_id, customer_id, recipient_id, type, metadata)
+       VALUES ($1,$2,$3,'clicked',$4)`,
+      [payload.c ?? null, payload.u ?? null, payload.r, JSON.stringify({ interest: 'Text us' })]
+    );
+    if (payload.u) {
+      const existing = await one(
+        `SELECT 1 FROM maintenance_leads WHERE customer_id=$1 AND campaign_id IS NOT DISTINCT FROM $2`,
+        [payload.u, payload.c ?? null]
+      );
+      if (!existing) {
+        await query(
+          `INSERT INTO maintenance_leads (customer_id, campaign_id, interest) VALUES ($1,$2,'Text us')`,
+          [payload.u, payload.c ?? null]
+        );
+        const customer = await one<any>(
+          'SELECT first_name, last_name, company_name FROM customers WHERE id=$1',
+          [payload.u]
+        );
+        await notify(
+          'success',
+          'Customer is texting you',
+          `${[customer?.first_name, customer?.last_name].filter(Boolean).join(' ') || customer?.company_name || 'A customer'} tapped "Text us".`
         );
       }
     }

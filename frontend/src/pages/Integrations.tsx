@@ -189,9 +189,60 @@ export default function Integrations() {
             Test connection
           </Button>
         </div>
+        {(() => {
+          const d = data.wave.lastSync?.details;
+          if (!d) return null;
+          const unreachable = (d.missing ?? []).length;
+          const found = Object.entries(d.foundIn ?? {}) as [string, number][];
+          return (
+            <div className="mt-5 space-y-3 border-t border-line pt-5">
+              <p className="text-sm text-soft">
+                Last sync saw <strong className="text-white">{d.total ?? 0}</strong> customers in Wave.
+              </p>
+
+              {found.length > 0 && (
+                <div>
+                  <p className="text-xs text-muted">Where their email addresses were found:</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {found
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([where, count]) => (
+                        <li key={where} className="text-sm text-soft">
+                          <span className="text-white">{count}</span> in the {where} field
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              )}
+
+              {unreachable > 0 && (
+                <div className="rounded-xl2 border border-warn/40 bg-warn/10 px-4 py-3">
+                  <p className="text-sm text-white">
+                    <strong>{unreachable}</strong> customers cannot be mailed —{' '}
+                    {d.missing.filter((m: any) => m.reason?.startsWith('no email')).length} have no
+                    email address in any field, and{' '}
+                    {d.missing.filter((m: any) => !m.reason?.startsWith('no email')).length} share an
+                    address with another customer.
+                  </p>
+                  <p className="mt-1 text-xs text-muted">
+                    Each one is fixed by adding the address in Wave, then syncing again.
+                  </p>
+                  <a
+                    href="/api/integrations/wave/unreachable.csv"
+                    className="mt-2 inline-block text-sm text-accent underline"
+                  >
+                    Download the list (CSV)
+                  </a>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         <p className="mt-3 text-xs text-muted">
-          Only customers with a valid email address are imported. Existing records are matched on their Wave ID, so
-          syncing twice never creates duplicates.{' '}
+          An email address is taken from the Email field, or from the contact name, shipping details,
+          internal notes, website or address lines when that box is empty. Existing records are matched
+          on their Wave ID, so syncing twice never creates duplicates.{' '}
           {data.wave.autoSync
             ? 'This runs on its own every night, so pressing the button is only needed when you want the list now.'
             : 'Automatic nightly syncing is turned off in Settings → Customer sync.'}

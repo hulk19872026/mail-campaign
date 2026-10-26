@@ -121,15 +121,11 @@ export async function testWaveConnection(): Promise<{
   };
 }
 
-const CUSTOMERS_QUERY = `
-  query ($businessId: ID!, $page: Int!, $pageSize: Int!) {
-    business(id: $businessId) {
-      id
-      name
-      customers(page: $page, pageSize: $pageSize) {
-        pageInfo { currentPage totalPages totalCount }
-        edges {
-          node {
+/**
+ * The fields every Wave schema is known to have. An address typed into any of
+ * them still reaches the customer, so all of them get scanned.
+ */
+const BASE_FIELDS = `
             id
             name
             firstName
@@ -144,13 +140,41 @@ const CUSTOMERS_QUERY = `
               postalCode
               province { name }
               country { name }
-            }
+            }`;
+
+/**
+ * Fields that hold an address often enough to be worth asking for, but which
+ * are documented outside Wave's own schema reference. Wave rejects a query
+ * naming a field it does not have, which would take the whole sync down with
+ * it, so the extended query is attempted once and the base one is used from
+ * then on if it is refused.
+ */
+const EXTRA_FIELDS = `
+            website
+            internalNotes
+            shippingDetails {
+              name
+              phone
+              instructions
+            }`;
+
+function customersQuery(extended: boolean): string {
+  return `
+  query ($businessId: ID!, $page: Int!, $pageSize: Int!) {
+    business(id: $businessId) {
+      id
+      name
+      customers(page: $page, pageSize: $pageSize) {
+        pageInfo { currentPage totalPages totalCount }
+        edges {
+          node {${BASE_FIELDS}${extended ? EXTRA_FIELDS : ''}
           }
         }
       }
     }
   }
 `;
+}
 
 const EMAIL_PATTERN = /[^\s@<>(),;:"']+@[^\s@<>(),;:"']+\.[^\s@<>(),;:"']+/;
 
@@ -174,13 +198,62 @@ function contactDetails(node: any): { email: string | null; firstName: string; l
   return { email, firstName: names[0] ?? '', lastName: names[1] ?? '' };
 }
 
+/**
+ * Everywhere an address can hide on a Wave customer, in the order they deserve
+ * to be trusted: the Email box first, then the contact name, then the boxes
+ * people use when there is nowhere obvious to put a second address.
+ *
+ * Wave only validates the Email field, so the rest hold whatever was typed —
+ * which for hundreds of customers is the only address anyone recorded. Each is
+ * scanned for something email-shaped rather than taken wholesale.
+ */
+function emailSources(node: any, contact: { email: string | null }): [string, unknown][] {
+  const ship = node.shippingDetails ?? {};
+  const addr = node.address ?? {};
+  return [
+    ['email', node.email],
+    ['contact name', contact.email],
+    ['shipping name', ship.name],
+    ['shipping instructions', ship.instructions],
+    ['internal notes', node.internalNotes],
+    ['website', node.website],
+    ['address line', [addr.addressLine1, addr.addressLine2].filter(Boolean).join(' ')],
+    ['customer name', node.name],
+  ];
+}
+
+/** The first address found on a customer, and which box it came out of. */
+function discoverEmail(node: any, contact: { email: string | null }): { email: string; from: string } | null {
+  for (const [from, value] of emailSources(node, contact)) {
+    const email = findEmail(value);
+    if (email) return { email, from };
+  }
+  return null;
+}
+
+/**
+ * Whether Wave turned the query down for naming a field it does not have, as
+ * opposed to being unreachable. Only the first is worth retrying with fewer
+ * fields; treating a network failure that way would report the wrong cause and
+ * send a second doomed request.
+ */
+function isUnknownFieldError(err: unknown): boolean {
+  if (!(err instanceof AppError) || err.status !== 400) return false;
+  return /cannot query field|unknown field|fieldundefined|undefinedfield/i.test(err.message);
+}
+
 export type SyncResult = {
   imported: number;
   updated: number;
   skipped: number;
+  duplicates: number;
   total: number;
   business: string;
+  /** How many addresses came out of each box, for the Integrations page. */
+  foundIn: Record<string, number>;
 };
+
+type MissingCustomer = { waveId: string; name: string; reason: string; email?: string };
 
 /** Pulls every Wave customer with a usable email address into PostgreSQL. */
 export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
@@ -199,8 +272,12 @@ export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
   let imported = 0;
   let updated = 0;
   let skipped = 0;
+  let duplicates = 0;
   let total = 0;
   let business = '';
+  const foundIn: Record<string, number> = {};
+  const missing: MissingCustomer[] = [];
+  let extended = true;
 
   try {
     let page = 1;
@@ -208,11 +285,21 @@ export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
     const pageSize = 200;
 
     do {
-      const data = await waveRequest<any>(CUSTOMERS_QUERY, {
-        businessId,
-        page,
-        pageSize,
-      });
+      let data: any;
+      try {
+        data = await waveRequest<any>(customersQuery(extended), { businessId, page, pageSize });
+      } catch (err) {
+        // Wave refusing a field is not a reason to abandon the sync: drop the
+        // extended selection and carry on with the fields every schema has.
+        // Only a schema rejection though — a network failure must still surface
+        // as one, rather than being reported as a missing field and retried.
+        if (!extended || !isUnknownFieldError(err)) throw err;
+        log.warn('Wave does not have the extended customer fields; syncing with the base fields', {
+          error: String(err instanceof Error ? err.message : err),
+        });
+        extended = false;
+        data = await waveRequest<any>(customersQuery(false), { businessId, page, pageSize });
+      }
       const biz = data?.business;
       if (!biz) {
         throw new AppError(
@@ -229,11 +316,18 @@ export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
       for (const edge of edges) {
         const node = edge.node;
         const contact = contactDetails(node);
-        const email = findEmail(node.email) ?? contact.email;
-        if (!email) {
+        const found = discoverEmail(node, contact);
+        if (!found) {
           skipped++;
+          missing.push({
+            waveId: String(node.id ?? ''),
+            name: String(node.name ?? '').trim() || 'Unnamed customer',
+            reason: 'no email address in any field',
+          });
           continue;
         }
+        const email = found.email;
+        foundIn[found.from] = (foundIn[found.from] ?? 0) + 1;
         const [firstName, ...rest] = String(node.name ?? '').trim().split(' ');
         const addr = node.address ?? {};
         const street = [addr.addressLine1, addr.addressLine2].filter(Boolean).join(', ');
@@ -270,19 +364,31 @@ export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
             addr.country?.name ?? '',
           ]
         ).catch(async (err: any) => {
-          // A customer with this email already exists under a different Wave ID: link them instead.
-          if (String(err?.message ?? '').includes('customers_email_key')) {
-            await query(
-              `UPDATE customers SET wave_customer_id = $1, updated_at = now()
-               WHERE lower(email) = lower($2) AND wave_customer_id IS NULL`,
-              [node.id, email]
-            );
-            return { inserted: false };
-          }
-          throw err;
+          if (!String(err?.message ?? '').includes('customers_email_key')) throw err;
+          // This address is already in the list. If it is on a row no Wave
+          // customer owns yet, claim it. If another Wave customer owns it, the
+          // two share an address and only one can hold it — which used to be
+          // counted as an update, so the second one disappeared with nothing
+          // said about it.
+          const linked = await query<{ id: number }>(
+            `UPDATE customers SET wave_customer_id = $1, updated_at = now()
+              WHERE lower(email) = lower($2) AND wave_customer_id IS NULL
+              RETURNING id`,
+            [node.id, email]
+          );
+          if (linked.length) return { inserted: false };
+          return { inserted: false, duplicate: true };
         });
 
-        if (result?.inserted) imported++;
+        if ((result as any)?.duplicate) {
+          duplicates++;
+          missing.push({
+            waveId: String(node.id ?? ''),
+            name: String(node.name ?? '').trim() || 'Unnamed customer',
+            reason: 'shares an email address with another Wave customer',
+            email,
+          });
+        } else if (result?.inserted) imported++;
         else updated++;
       }
 
@@ -290,22 +396,34 @@ export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
     } while (page <= totalPages);
 
     await query(
-      `UPDATE sync_runs SET status='success', imported=$2, updated=$3, skipped=$4, finished_at=now()
+      `UPDATE sync_runs SET status='success', imported=$2, updated=$3, skipped=$4,
+              details=$5, finished_at=now()
        WHERE id=$1`,
-      [run!.id, imported, updated, skipped]
+      [
+        run!.id,
+        imported,
+        updated,
+        skipped,
+        JSON.stringify({ duplicates, total, foundIn, extended, missing }),
+      ]
     );
     await audit('wave.sync', {
       actor,
       entity: 'wave',
-      details: { imported, updated, skipped, total },
+      details: { imported, updated, skipped, duplicates, total, foundIn },
     });
+    const unreachable = skipped + duplicates;
     await notify(
       'success',
       'Wave sync finished',
-      `${imported} new customers, ${updated} updated, ${skipped} skipped (no email address).`
+      `${total} customers in Wave — ${imported} new, ${updated} updated` +
+        (unreachable
+          ? `, ${unreachable} could not be mailed (${skipped} with no email anywhere, ` +
+            `${duplicates} sharing an address with another customer). The Integrations page lists them.`
+          : '.')
     );
-    log.info('Wave sync complete', { imported, updated, skipped });
-    return { imported, updated, skipped, total, business };
+    log.info('Wave sync complete', { imported, updated, skipped, duplicates, total, foundIn });
+    return { imported, updated, skipped, duplicates, total, business, foundIn };
   } catch (err) {
     await query(
       `UPDATE sync_runs SET status='failed', error=$2, finished_at=now() WHERE id=$1`,
@@ -318,7 +436,7 @@ export async function syncWaveCustomers(actor = 'system'): Promise<SyncResult> {
 
 export async function lastSync() {
   return one(
-    `SELECT id, status, imported, updated, skipped, error, started_at, finished_at
+    `SELECT id, status, imported, updated, skipped, error, details, started_at, finished_at
      FROM sync_runs WHERE source='wave' ORDER BY id DESC LIMIT 1`
   );
 }

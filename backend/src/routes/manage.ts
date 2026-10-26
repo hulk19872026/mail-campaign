@@ -212,6 +212,30 @@ manageRouter.post(
   })
 );
 
+/**
+ * The customers the last sync could not mail, as a spreadsheet. The fix for
+ * each one is in Wave, so the list has to be able to leave this app.
+ */
+manageRouter.get(
+  '/integrations/wave/unreachable.csv',
+  handler(async (_req, res) => {
+    const run = await one<any>(
+      `SELECT details FROM sync_runs
+        WHERE source='wave' AND status='success' ORDER BY id DESC LIMIT 1`
+    );
+    const missing: any[] = run?.details?.missing ?? [];
+    const cell = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [
+      'Customer,Why they cannot be mailed,Email found,Wave customer id',
+      ...missing.map((m) => [m.name, m.reason, m.email ?? '', m.waveId].map(cell).join(',')),
+    ].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="wave-customers-without-email.csv"');
+    res.send(csv);
+  })
+);
+
 manageRouter.post(
   '/integrations/wave/sync',
   handler(async (req, res) => {

@@ -292,8 +292,8 @@ prospectsRouter.delete(
 );
 
 /**
- * Once a prospect replies or becomes a client they have a relationship with us
- * and can join the customer list that Resend campaigns go to.
+ * Moves a prospect into the customer list that Resend campaigns go to. Never
+ * automatic — it happens only when someone presses the button on a Won prospect.
  */
 prospectsRouter.post(
   '/:id/convert',
@@ -302,11 +302,10 @@ prospectsRouter.post(
     const p = await one<any>('SELECT * FROM prospects WHERE id = $1', [id]);
     if (!p) throw new AppError('That prospect was not found.', 404);
     if (!p.email) throw new AppError('Add an email address before making them a customer.', 400);
-    if (!['replied', 'meeting', 'quoted', 'won'].includes(p.status)) {
-      throw new AppError(
-        'Only prospects who have replied or become clients can join your customer list — set their status first.',
-        400
-      );
+    // Prospects stay out of the customer base until they actually buy: a reply
+    // or a quote is not enough. Only a Won prospect can be moved across.
+    if (p.status !== 'won') {
+      throw new AppError('Only a prospect marked Won can join your customer list. Set their status to Won first.', 400);
     }
     const [first, ...rest] = text(p.contact_name).split(/\s+/);
     const customer = await one<any>(

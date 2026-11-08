@@ -53,7 +53,8 @@ const STATUSES: { id: string; label: string }[] = [
   { id: 'lost', label: 'Lost' },
   { id: 'do_not_contact', label: 'Do not contact' },
 ];
-const CAN_CONVERT = ['replied', 'meeting', 'quoted', 'won'];
+// Prospects join the customer base only once they've bought — never on a reply alone.
+const CAN_CONVERT = ['won'];
 
 const EMPTY_FORM = {
   business_name: '',
@@ -174,7 +175,8 @@ export default function Prospects() {
             <span className="font-semibold text-white">This page never emails anyone.</span> Prospects haven't asked
             to hear from you, and Resend can close your account for cold email — which would stop your customer
             campaigns too. Export the list and send from Mailmeteor on your second domain. When someone replies, set
-            them to <em>Replied</em> and add them as a customer.
+            them to <em>Replied</em>. They stay off your customer list until you mark them <em>Won</em> and press{' '}
+            <em>Add as customer</em>.
           </p>
         </div>
       </Card>

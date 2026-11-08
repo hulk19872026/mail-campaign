@@ -129,7 +129,49 @@ prospectsRouter.post(
   })
 );
 
-/** CSV in, one prospect per row. Columns are matched loosely so a Google Maps or Hunter export works as is. */
+/**
+ * Adds rows to a prospect list, skipping anyone already on any list. Columns are
+ * matched loosely so a Google Maps or Hunter export works as is. Shared by the
+ * CSV import on the page and the lead-finder feed.
+ */
+export async function importProspectRows(
+  listValue: any,
+  rows: Record<string, any>[]
+): Promise<{ added: number; duplicates: number; skipped: number }> {
+  const list = listOf(listValue);
+  let added = 0;
+  let duplicates = 0;
+  let skipped = 0;
+  for (const r of rows) {
+    const business = text(r.business_name ?? r.business ?? r.company ?? r.company_name ?? r.name);
+    let email = text(r.email ?? r.email_address).toLowerCase();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) email = '';
+    if (!business && !email) {
+      skipped++;
+      continue;
+    }
+    const inserted = await one(
+      `INSERT INTO prospects (list, business_name, contact_name, email, phone, address, category, notes, source_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT DO NOTHING RETURNING id`,
+      [
+        list,
+        business || email,
+        text(r.contact_name ?? r.contact ?? r.first_name),
+        email,
+        text(r.phone ?? r.phone_number),
+        text(r.address ?? r.street),
+        text(r.category ?? r.type),
+        text(r.notes),
+        text(r.source_url ?? r.website ?? r.source),
+      ]
+    );
+    if (inserted) added++;
+    else duplicates++;
+  }
+  return { added, duplicates, skipped };
+}
+
 prospectsRouter.post(
   '/import/csv',
   handler(async (req, res) => {
@@ -138,39 +180,9 @@ prospectsRouter.post(
     if (!raw.trim()) throw new AppError('Paste or upload a CSV with at least a business name column.', 400);
     const rows = parseCsv(raw);
     if (!rows.length) throw new AppError('No rows were found in that CSV.', 400);
-
-    let added = 0;
-    let duplicates = 0;
-    let skipped = 0;
-    for (const r of rows) {
-      const business = text(r.business_name ?? r.business ?? r.company ?? r.company_name ?? r.name);
-      let email = text(r.email ?? r.email_address).toLowerCase();
-      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) email = '';
-      if (!business && !email) {
-        skipped++;
-        continue;
-      }
-      const inserted = await one(
-        `INSERT INTO prospects (list, business_name, contact_name, email, phone, address, category, notes, source_url)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         ON CONFLICT DO NOTHING RETURNING id`,
-        [
-          list,
-          business || email,
-          text(r.contact_name ?? r.contact ?? r.first_name),
-          email,
-          text(r.phone ?? r.phone_number),
-          text(r.address ?? r.street),
-          text(r.category ?? r.type),
-          text(r.notes),
-          text(r.source_url ?? r.website ?? r.source),
-        ]
-      );
-      if (inserted) added++;
-      else duplicates++;
-    }
-    await audit('prospect.import', { actor: actorOf(req), details: { list, added, duplicates, skipped } });
-    res.json({ added, duplicates, skipped });
+    const result = await importProspectRows(list, rows);
+    await audit('prospect.import', { actor: actorOf(req), details: { list, ...result } });
+    res.json(result);
   })
 );
 

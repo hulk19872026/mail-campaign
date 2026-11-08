@@ -60,6 +60,10 @@ export const env = {
   TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER ?? '',
   /** The number the email's "Text us" button opens, when Settings has none. */
   SMS_NUMBER: process.env.SMS_NUMBER ?? '+12126879116',
+
+  // Lets the weekly lead finder add prospects without a sign-in. Unset = the
+  // feed is switched off. Keep it long and random; it only grants adding prospects.
+  PROSPECT_FEED_TOKEN: (process.env.PROSPECT_FEED_TOKEN ?? '').trim(),
 };
 
 /**

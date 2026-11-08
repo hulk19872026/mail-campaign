@@ -16,6 +16,7 @@ import { manageRouter } from './routes/manage';
 import { insightsRouter } from './routes/insights';
 import { publicRouter } from './routes/public';
 import { prospectsRouter } from './routes/prospects';
+import { feedsRouter } from './routes/feeds';
 import { startScheduler } from './services/scheduler';
 
 const app = express();
@@ -41,6 +42,8 @@ app.use('/', publicRouter);
 
 // Everything under /api needs a session, except signing in.
 app.use('/api/auth', authRouter);
+// Token-protected drop-off for the weekly lead finder (no session; add-only).
+app.use('/api/feeds', feedsRouter);
 app.use('/api/customers', requireAuth, customersRouter);
 app.use('/api/groups', requireAuth, groupsRouter);
 app.use('/api/campaigns', requireAuth, campaignsRouter);

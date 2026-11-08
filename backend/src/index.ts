@@ -15,6 +15,7 @@ import { campaignsRouter } from './routes/campaigns';
 import { manageRouter } from './routes/manage';
 import { insightsRouter } from './routes/insights';
 import { publicRouter } from './routes/public';
+import { prospectsRouter } from './routes/prospects';
 import { startScheduler } from './services/scheduler';
 
 const app = express();
@@ -43,6 +44,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/customers', requireAuth, customersRouter);
 app.use('/api/groups', requireAuth, groupsRouter);
 app.use('/api/campaigns', requireAuth, campaignsRouter);
+app.use('/api/prospects', requireAuth, prospectsRouter);
 app.use('/api', requireAuth, manageRouter);
 app.use('/api', requireAuth, insightsRouter);
 

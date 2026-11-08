@@ -14,6 +14,7 @@ import Templates from './pages/Templates';
 import Schedule from './pages/Schedule';
 import Analytics from './pages/Analytics';
 import Leads from './pages/Leads';
+import Prospects from './pages/Prospects';
 import Integrations from './pages/Integrations';
 import SettingsPage from './pages/Settings';
 import Help from './pages/Help';
@@ -74,6 +75,7 @@ export default function App() {
           <Route path="/schedule" element={<Schedule />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/leads" element={<Leads />} />
+          <Route path="/prospects" element={<Prospects />} />
           <Route path="/integrations" element={<Integrations />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/help" element={<Help />} />

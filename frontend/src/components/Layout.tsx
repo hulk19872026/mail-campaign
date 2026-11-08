@@ -14,6 +14,7 @@ import {
   Menu,
   Plug,
   Settings as SettingsIcon,
+  Target,
   Users,
   Wrench,
 } from 'lucide-react';
@@ -30,6 +31,7 @@ const NAV = [
   { to: '/schedule', label: 'Schedule', icon: CalendarClock },
   { to: '/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/leads', label: 'Maintenance leads', icon: Wrench },
+  { to: '/prospects', label: 'Prospects', icon: Target },
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
   { to: '/help', label: 'Help', icon: LifeBuoy },

@@ -9,6 +9,7 @@ import { verifyResendWebhook } from '../services/resend';
 import { normalizePhone, phoneKeySql, verifyTwilioWebhook } from '../services/twilio';
 import { suppressNumber } from '../services/campaigns';
 import { audit, notify } from '../services/activity';
+import { recordOpen } from '../services/outreach';
 import { escapeHtml, formatPhone, smsHref } from '../email/render';
 
 export const publicRouter = Router();
@@ -43,6 +44,17 @@ publicRouter.get(
         [payload.c ?? null, payload.u ?? null, payload.r]
       );
     }
+  })
+);
+
+/** Open tracking for automatic prospect emails (see services/outreach). */
+publicRouter.get(
+  '/t/p/:token.gif',
+  handler(async (req, res) => {
+    res.setHeader('Content-Type', 'image/gif');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.end(PIXEL);
+    await recordOpen(String(req.params.token));
   })
 );
 

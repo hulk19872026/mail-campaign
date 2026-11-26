@@ -17,6 +17,7 @@ import { insightsRouter } from './routes/insights';
 import { publicRouter } from './routes/public';
 import { prospectsRouter } from './routes/prospects';
 import { feedsRouter } from './routes/feeds';
+import { outreachRouter } from './routes/outreach';
 import { startScheduler } from './services/scheduler';
 
 const app = express();
@@ -48,6 +49,7 @@ app.use('/api/customers', requireAuth, customersRouter);
 app.use('/api/groups', requireAuth, groupsRouter);
 app.use('/api/campaigns', requireAuth, campaignsRouter);
 app.use('/api/prospects', requireAuth, prospectsRouter);
+app.use('/api/outreach', requireAuth, outreachRouter);
 app.use('/api', requireAuth, manageRouter);
 app.use('/api', requireAuth, insightsRouter);
 

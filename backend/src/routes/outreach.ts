@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { Router } from 'express';
 import { query } from '../lib/db';
 import { env } from '../lib/env';
@@ -37,7 +39,14 @@ outreachRouter.get(
          FROM outreach_messages m LEFT JOIN prospects p ON p.id = m.prospect_id
         ORDER BY m.sent_at DESC LIMIT 25`
     );
+    // Whether each list's flyer is still on the server, and how big it is.
+    const flyers: Record<string, { exists: boolean; size: number }> = {};
+    for (const [list, a] of Object.entries(settings.attachments)) {
+      const stat = fs.statSync(path.join(env.UPLOAD_DIR, a.path), { throwIfNoEntry: false });
+      flyers[list] = { exists: !!stat, size: stat?.size ?? 0 };
+    }
     res.json({
+      flyers,
       settings,
       configured: outreachConfigured(),
       sender: env.OUTREACH_EMAIL,
@@ -56,7 +65,7 @@ outreachRouter.put(
   handler(async (req, res) => {
     const b = req.body ?? {};
     const patch: Record<string, any> = {};
-    for (const key of ['lists', 'daily_new_limit', 'start_time', 'end_time', 'gap_minutes', 'track_opens', 'from_name', 'signature']) {
+    for (const key of ['lists', 'daily_new_limit', 'start_time', 'end_time', 'gap_minutes', 'track_opens', 'from_name', 'signature', 'attachments']) {
       if (b[key] !== undefined) patch[key] = b[key];
     }
     if (b.enabled !== undefined) patch.enabled = b.enabled === true;

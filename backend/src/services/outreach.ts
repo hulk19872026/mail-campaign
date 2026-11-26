@@ -1,4 +1,6 @@
 import { randomBytes } from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { DateTime } from 'luxon';
 import nodemailer, { type Transporter } from 'nodemailer';
 import { ImapFlow } from 'imapflow';
@@ -37,7 +39,11 @@ export type OutreachSettings = {
   from_name: string;
   /** Plain text added under every email. Empty = name, company and phone from Settings. */
   signature: string;
+  /** A flyer attached to a list's emails: the uploaded file and which of the three emails carry it. */
+  attachments: Record<string, OutreachAttachment>;
 };
+
+export type OutreachAttachment = { path: string; name: string; steps: number[] };
 
 export const DEFAULT_OUTREACH: OutreachSettings = {
   enabled: false,
@@ -49,6 +55,7 @@ export const DEFAULT_OUTREACH: OutreachSettings = {
   track_opens: true,
   from_name: 'HULK Automation',
   signature: '',
+  attachments: {},
 };
 
 /** Never more than this many emails of any kind in one day, whatever the settings say. */
@@ -82,6 +89,17 @@ export async function getOutreachSettings(): Promise<OutreachSettings> {
   v.track_opens = v.track_opens !== false;
   v.from_name = String(v.from_name ?? '').trim().slice(0, 80) || DEFAULT_OUTREACH.from_name;
   v.signature = String(v.signature ?? '').slice(0, 1000);
+  const attachments: Record<string, OutreachAttachment> = {};
+  for (const [list, a] of Object.entries((v.attachments ?? {}) as Record<string, any>)) {
+    const file = path.basename(String(a?.path ?? ''));
+    if (!(OUTREACH_LISTS as readonly string[]).includes(list) || !file) continue;
+    attachments[list] = {
+      path: file,
+      name: String(a?.name ?? file).slice(0, 120) || file,
+      steps: (Array.isArray(a?.steps) ? a.steps : []).map(Number).filter((n: number) => n >= 1 && n <= 3),
+    };
+  }
+  v.attachments = attachments;
   return v;
 }
 
@@ -245,6 +263,24 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * The flyer to attach to this list's email `step`, if one is set. A file that has
+ * gone missing (no Railway volume, so it was lost on a redeploy) is reported
+ * rather than silently sending the email without it.
+ */
+function attachmentFor(s: OutreachSettings, list: string, step: number) {
+  const a = s.attachments[list];
+  if (!a || !a.steps.includes(step)) return { files: [] as { filename: string; path: string }[] };
+  const full = path.join(env.UPLOAD_DIR, a.path);
+  if (!fs.existsSync(full)) {
+    return {
+      files: [],
+      missing: `The ${list} flyer (${a.name}) is no longer on the server — upload it again in Prospects → Automatic emails.`,
+    };
+  }
+  return { files: [{ filename: a.name, path: full }] };
+}
+
 async function stepTemplate(list: string, step: number) {
   return one<{ subject: string; body: string }>(
     `SELECT subject, body FROM outreach_steps WHERE list = $1 AND step = $2 AND btrim(body) <> ''`,
@@ -287,6 +323,8 @@ async function sendStep(p: ProspectRow, step: number, s: OutreachSettings, app: 
   const token = randomBytes(16).toString('hex');
   const pixel = s.track_opens ? `${env.APP_URL}/t/p/${token}.gif` : undefined;
   const msg = render(step, template, p.first_subject, p, s, app, pixel);
+  const flyer = attachmentFor(s, p.list, step);
+  if (flyer.missing) return { ok: false as const, error: flyer.missing };
 
   try {
     const info = await mailer().sendMail({
@@ -295,6 +333,7 @@ async function sendStep(p: ProspectRow, step: number, s: OutreachSettings, app: 
       subject: msg.subject,
       text: msg.text,
       html: msg.html,
+      attachments: flyer.files,
       ...(step > 1 && p.last_message_id
         ? { inReplyTo: p.last_message_id, references: [p.last_message_id] }
         : {}),
@@ -432,6 +471,8 @@ export async function sendTest(list: string, step: number, to: string) {
   const app = await getSettings();
   const first = step > 1 ? await stepTemplate(list, 1) : null;
   const msg = render(step, template, first ? fill(first.subject, sample) : '', sample, s, app);
+  const flyer = attachmentFor(s, list, step);
+  if (flyer.missing) throw new AppError(flyer.missing, 400);
   try {
     await mailer().sendMail({
       from: { name: s.from_name, address: env.OUTREACH_EMAIL },
@@ -439,6 +480,7 @@ export async function sendTest(list: string, step: number, to: string) {
       subject: `[TEST] ${msg.subject}`,
       text: msg.text,
       html: msg.html,
+      attachments: flyer.files,
     });
   } catch (err) {
     throw new AppError(`Gmail didn't accept the test: ${friendlyError(err)}`, 400);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Mail, PauseCircle, PlayCircle, Send, XCircle } from 'lucide-react';
+import { CheckCircle2, Mail, Paperclip, PauseCircle, PlayCircle, Send, Trash2, Upload, XCircle } from 'lucide-react';
 import { api, errorText } from '../lib/api';
 import { formatDate } from '../lib/format';
 import { Badge, Button, Card, Field, Input, Modal, Spinner, Textarea, Toggle, useToast } from './ui';
@@ -14,12 +14,14 @@ export type OutreachSettings = {
   track_opens: boolean;
   from_name: string;
   signature: string;
+  attachments: Record<string, { path: string; name: string; steps: number[] }>;
 };
 
 type Step = { list: string; step: number; subject: string; body: string };
 
 export type OutreachInfo = {
   settings: OutreachSettings;
+  flyers: Record<string, { exists: boolean; size: number }>;
   configured: boolean;
   sender: string;
   problems: string[];
@@ -171,6 +173,33 @@ export function OutreachModal({
       toast.push('success', `Inbox checked: ${r.result}`);
       await load();
       onChanged();
+    });
+
+  const uploadFlyer = (file?: File) => {
+    if (!file || !settings) return;
+    run('flyer', async () => {
+      const up = await api.upload<{ path: string; name: string }>('/api/uploads', file);
+      const attachments = { ...settings.attachments, [list]: { path: up.path, name: up.name, steps: [1, 2, 3] } };
+      await api.put('/api/outreach', { attachments });
+      toast.push('success', `${up.name} will go with every ${lists.find((l) => l.id === list)?.label} email.`);
+      await load();
+    });
+  };
+
+  const setFlyerSteps = (stepsOn: number[]) =>
+    run('flyer', async () => {
+      const current = settings!.attachments[list];
+      await api.put('/api/outreach', { attachments: { ...settings!.attachments, [list]: { ...current, steps: stepsOn } } });
+      await load();
+    });
+
+  const removeFlyer = () =>
+    run('flyer', async () => {
+      const attachments = { ...settings!.attachments };
+      delete attachments[list];
+      await api.put('/api/outreach', { attachments });
+      toast.push('success', 'Flyer removed.');
+      await load();
     });
 
   const setStep = (n: number, key: 'subject' | 'body', value: string) =>
@@ -348,8 +377,77 @@ export function OutreachModal({
             <p className="text-xs text-muted">
               Fill-ins: <code>{'{{first_name}}'}</code> (or “there”), <code>{'{{business_name}}'}</code>,{' '}
               <code>{'{{address}}'}</code>, <code>{'{{contact_name}}'}</code>, <code>{'{{category}}'}</code>. Keep them
-              short and plain — no links or pictures. Leave an email empty to stop the sequence before it.
+              short and plain — no links or pictures in the text. Leave an email empty to stop the sequence before it.
             </p>
+            <div className="space-y-2 rounded-lg border border-line p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="flex items-center gap-2 text-sm font-medium text-white">
+                  <Paperclip className="h-4 w-4" /> Flyer for this list
+                </p>
+                <div className="flex gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-soft hover:text-white">
+                    <Upload className="h-3.5 w-3.5" />
+                    {busy === 'flyer' ? 'Uploading…' : settings.attachments[list] ? 'Replace' : 'Upload PDF or image'}
+                    <input
+                      type="file"
+                      accept="application/pdf,image/png,image/jpeg"
+                      className="hidden"
+                      onChange={(e) => {
+                        uploadFlyer(e.target.files?.[0]);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  {settings.attachments[list] && (
+                    <Button size="sm" variant="ghost" icon={<Trash2 className="h-3.5 w-3.5" />} onClick={removeFlyer}>
+                      Remove
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {settings.attachments[list] ? (
+                <>
+                  <p className="text-sm text-soft">
+                    {settings.attachments[list].name}
+                    {info.flyers[list]?.exists && (
+                      <span className="text-muted"> · {(info.flyers[list].size / 1024 / 1024).toFixed(1)} MB</span>
+                    )}
+                  </p>
+                  {info.flyers[list] && !info.flyers[list].exists && (
+                    <p className="text-xs text-danger">
+                      The file is no longer on the server, so these emails are on hold. Upload it again.
+                    </p>
+                  )}
+                  {info.flyers[list]?.size > 2 * 1024 * 1024 && (
+                    <p className="text-xs text-warn">Over 2 MB — a smaller file is less likely to land in spam.</p>
+                  )}
+                  <div className="flex flex-wrap gap-4 text-sm text-soft">
+                    <span className="text-muted">Attach to:</span>
+                    {[1, 2, 3].map((n) => {
+                      const on = settings.attachments[list].steps.includes(n);
+                      return (
+                        <label key={n} className="flex items-center gap-1.5">
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() =>
+                              setFlyerSteps(
+                                on
+                                  ? settings.attachments[list].steps.filter((x) => x !== n)
+                                  : [...settings.attachments[list].steps, n].sort()
+                              )
+                            }
+                          />
+                          Email {n}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-muted">No flyer — these emails go out as plain text only.</p>
+              )}
+            </div>
             {(steps[list] ?? []).map((s) => (
               <div key={s.step} className="space-y-2 rounded-lg border border-line p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">

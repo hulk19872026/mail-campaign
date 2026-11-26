@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Download, Pencil, Phone, Plus, Target, Trash2, Upload, UserPlus } from 'lucide-react';
+import { Download, Eye, Pencil, Phone, Plus, Target, Trash2, Upload, UserPlus } from 'lucide-react';
 import { api, errorText } from '../lib/api';
 import { formatDate } from '../lib/format';
+import { OutreachBar, OutreachModal, type OutreachInfo } from '../components/OutreachSetup';
 import {
   Badge,
   Button,
@@ -34,6 +35,10 @@ type Prospect = {
   converted_customer_id: number | null;
   customer_id: number | null;
   customer_opted_out: boolean;
+  sequence_step: number;
+  opened_at: string | null;
+  open_count: number;
+  replied_at: string | null;
 };
 
 const LISTS = [
@@ -73,6 +78,9 @@ export default function Prospects() {
   const [prospects, setProspects] = useState<Prospect[]>([]);
   const [counts, setCounts] = useState<{ list: string; status: string; count: string }[]>([]);
   const [dueToday, setDueToday] = useState(0);
+  const [openedNoReply, setOpenedNoReply] = useState(0);
+  const [outreach, setOutreach] = useState<OutreachInfo | null>(null);
+  const [outreachOpen, setOutreachOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<Prospect | 'new' | null>(null);
@@ -85,15 +93,26 @@ export default function Prospects() {
     if (status) params.set('status', status);
     if (search.trim()) params.set('search', search.trim());
     api
-      .get<{ prospects: Prospect[]; counts: any[]; dueToday: number }>(`/api/prospects?${params}`)
+      .get<{ prospects: Prospect[]; counts: any[]; dueToday: number; openedNoReply: number }>(`/api/prospects?${params}`)
       .then((data) => {
         setProspects(data.prospects);
         setCounts(data.counts);
         setDueToday(data.dueToday);
+        setOpenedNoReply(data.openedNoReply);
       })
       .catch((err) => setError(errorText(err)))
       .finally(() => setLoading(false));
   };
+
+  const loadOutreach = () =>
+    api
+      .get<OutreachInfo>('/api/outreach')
+      .then(setOutreach)
+      .catch(() => setOutreach(null));
+
+  useEffect(() => {
+    loadOutreach();
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(load, search ? 250 : 0);
@@ -152,7 +171,7 @@ export default function Prospects() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">Prospects</h1>
           <p className="mt-1 text-sm text-muted">
-            Businesses you want to win. Track them here, then send from Mailmeteor.
+            Businesses you want to win. Emailed automatically from your outreach mailbox — never through Resend.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -160,7 +179,7 @@ export default function Prospects() {
             Import CSV
           </Button>
           <a href={`/api/prospects/export/csv?list=${list}`}>
-            <Button icon={<Download className="h-4 w-4" />}>Export for Mailmeteor</Button>
+            <Button icon={<Download className="h-4 w-4" />}>Export CSV</Button>
           </a>
           <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => setEditing('new')}>
             Add prospect
@@ -168,18 +187,7 @@ export default function Prospects() {
         </div>
       </div>
 
-      <Card className="border-warn/40">
-        <div className="flex gap-3">
-          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warn" />
-          <p className="text-sm text-soft">
-            <span className="font-semibold text-white">This page never emails anyone.</span> Prospects haven't asked
-            to hear from you, and Resend can close your account for cold email — which would stop your customer
-            campaigns too. Export the list and send from Mailmeteor on your second domain. When someone replies, set
-            them to <em>Replied</em>. They stay off your customer list until you mark them <em>Won</em> and press{' '}
-            <em>Add as customer</em>.
-          </p>
-        </div>
-      </Card>
+      <OutreachBar info={outreach} onOpen={() => setOutreachOpen(true)} />
 
       <div className="flex flex-wrap gap-2">
         {LISTS.map((l) => (
@@ -198,7 +206,7 @@ export default function Prospects() {
         ))}
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card>
           <p className="text-xs text-muted">Ready for outreach</p>
           <p className="mt-1 text-xl font-bold text-white sm:text-2xl">{ready}</p>
@@ -206,6 +214,12 @@ export default function Prospects() {
         <Card>
           <p className="text-xs text-muted">Follow-ups due today</p>
           <p className={`mt-1 text-xl font-bold sm:text-2xl ${dueToday ? 'text-warn' : 'text-white'}`}>{dueToday}</p>
+        </Card>
+        <Card>
+          <button className="w-full text-left" onClick={() => setStatus('opened')}>
+            <p className="text-xs text-muted">Opened, no reply yet</p>
+            <p className={`mt-1 text-xl font-bold sm:text-2xl ${openedNoReply ? 'text-accent' : 'text-white'}`}>{openedNoReply}</p>
+          </button>
         </Card>
         <Card>
           <p className="text-xs text-muted">Replied or better</p>
@@ -224,6 +238,7 @@ export default function Prospects() {
         />
         <Select value={status} onChange={(e) => setStatus(e.target.value)} className="sm:w-auto">
           <option value="">All statuses</option>
+          <option value="opened">Opened, no reply yet ({openedNoReply})</option>
           {STATUSES.map((s) => (
             <option key={s.id} value={s.id}>
               {s.label} ({countFor(list, s.id)})
@@ -251,6 +266,17 @@ export default function Prospects() {
                       {p.category && <Badge tone="grey">{p.category}</Badge>}
                       {p.customer_id && <Badge tone="green">Already a customer</Badge>}
                       {p.customer_opted_out && <Badge tone="red">Unsubscribed</Badge>}
+                      {p.sequence_step > 0 && (
+                        <Badge tone="blue">
+                          {p.sequence_step >= 3 ? 'All 3 emails sent' : `Email ${p.sequence_step} of 3 sent`}
+                        </Badge>
+                      )}
+                      {p.opened_at && (
+                        <Badge tone="green">
+                          <Eye className="h-3 w-3" /> Opened {formatDate(p.opened_at)}
+                          {p.open_count > 1 ? ` ×${p.open_count}` : ''}
+                        </Badge>
+                      )}
                     </div>
                     <p className="mt-0.5 truncate text-xs text-muted">{p.address || '—'}</p>
                     {p.notes && <p className="mt-1 text-xs text-soft">{p.notes}</p>}
@@ -310,6 +336,19 @@ export default function Prospects() {
         }}
       />
       <ImportModal open={importing} list={list} onClose={() => setImporting(false)} onDone={load} />
+      <OutreachModal
+        open={outreachOpen}
+        lists={LISTS}
+        initialList={list}
+        onClose={() => {
+          setOutreachOpen(false);
+          loadOutreach();
+        }}
+        onChanged={() => {
+          loadOutreach();
+          load();
+        }}
+      />
     </div>
   );
 }

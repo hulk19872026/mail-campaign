@@ -10,7 +10,8 @@ import { parseCsv } from './customers';
  * stores, tracks and exports them — it deliberately has no way to email them.
  * Resend's policy forbids cold outreach and a breach would shut down the
  * account customers' mail goes through, so cold email is sent from a separate
- * domain with Mailmeteor using the CSV exported here.
+ * domain: automatically by services/outreach through its own Google mailbox,
+ * or by hand with Mailmeteor using the CSV exported here.
  */
 export const prospectsRouter = Router();
 
@@ -71,6 +72,10 @@ prospectsRouter.get(
     const list = listOf(req.query.list);
     const params: any[] = [list];
     let where = 'p.list = $1';
+    // "opened" is a filter, not a status: opened an email but hasn't replied yet.
+    if (req.query.status === 'opened') {
+      where += ` AND p.opened_at IS NOT NULL AND p.status IN ('contacted','follow_up')`;
+    }
     const status = statusOf(req.query.status);
     if (status) {
       params.push(status);
@@ -96,7 +101,12 @@ prospectsRouter.get(
         WHERE list = $1 AND next_follow_up <= current_date AND status IN ('contacted','follow_up')`,
       [list]
     );
-    res.json({ prospects, counts, dueToday: Number(due?.count ?? 0) });
+    const opened = await one<{ count: string }>(
+      `SELECT count(*)::text AS count FROM prospects
+        WHERE list = $1 AND opened_at IS NOT NULL AND status IN ('contacted','follow_up')`,
+      [list]
+    );
+    res.json({ prospects, counts, dueToday: Number(due?.count ?? 0), openedNoReply: Number(opened?.count ?? 0) });
   })
 );
 

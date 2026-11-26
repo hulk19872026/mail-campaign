@@ -64,6 +64,12 @@ export const env = {
   // Lets the weekly lead finder add prospects without a sign-in. Unset = the
   // feed is switched off. Keep it long and random; it only grants adding prospects.
   PROSPECT_FEED_TOKEN: (process.env.PROSPECT_FEED_TOKEN ?? '').trim(),
+
+  // The Google Workspace mailbox prospects are emailed from — on a separate
+  // domain, never the one Resend sends customer mail from. The password is a
+  // Google app password (16 letters), not the account's normal password.
+  OUTREACH_EMAIL: (process.env.OUTREACH_EMAIL ?? '').trim().toLowerCase(),
+  OUTREACH_APP_PASSWORD: (process.env.OUTREACH_APP_PASSWORD ?? '').replace(/\s+/g, ''),
 };
 
 /**

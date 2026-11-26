@@ -3,6 +3,7 @@ import { withClient } from '../lib/db';
 import { log } from '../lib/logger';
 import { minutesNow, parseTime, processDueCampaigns, recoverStuckRecipients, today } from './campaigns';
 import { getSettings } from './settings';
+import { checkInbox, logOutreach, outreachConfigured, outreachState, runOutreachPass } from './outreach';
 import {
   MAX_SYNC_ATTEMPTS_PER_DAY,
   failedSyncsToday,
@@ -14,6 +15,9 @@ import {
 const LOCK_KEY = 918_273_645;
 /** A separate lock, so a long send never holds up the nightly sync or vice versa. */
 const SYNC_LOCK_KEY = 918_273_646;
+/** Automatic prospect emails and the inbox check have their own locks too. */
+const OUTREACH_LOCK_KEY = 918_273_647;
+const INBOX_LOCK_KEY = 918_273_648;
 
 export const schedulerState = {
   enabled: false,
@@ -99,6 +103,25 @@ async function syncTick(): Promise<void> {
   log.info('Nightly Wave sync finished', schedulerState.lastSyncResult);
 }
 
+/** Automatic prospect emails: at most one per pass, weekdays only (see services/outreach). */
+async function outreachTick(): Promise<void> {
+  const result = await withLock(() => runOutreachPass(), OUTREACH_LOCK_KEY);
+  if (result) logOutreach(result);
+}
+
+/** Replies and bounces in the outreach mailbox stop that prospect's follow-ups. */
+async function inboxTick(): Promise<void> {
+  if (!outreachConfigured()) return;
+  const result = await withLock(() => checkInbox(), INBOX_LOCK_KEY).catch((err) => {
+    log.warn('Outreach inbox check failed', { error: String(err?.message ?? err) });
+    return `Couldn't read the inbox: ${String(err?.message ?? err)}`;
+  });
+  if (result) {
+    outreachState.lastInboxCheckAt = new Date().toISOString();
+    outreachState.lastInboxResult = result;
+  }
+}
+
 export function startScheduler(): void {
   // Every five minutes: checks the clock, the daily count, and the queue.
   cron.schedule('*/5 * * * *', () => {
@@ -111,6 +134,16 @@ export function startScheduler(): void {
   // or only started this morning — still be caught the same day.
   cron.schedule('*/15 * * * *', () => {
     syncTick().catch((err) => log.error('Sync tick failed', { error: String(err) }));
+  });
+
+  // Every five minutes: is an automatic prospect email due? Every quarter of an
+  // hour: has anyone replied or bounced? Replies are checked first so a reply
+  // that just arrived stops the next follow-up.
+  cron.schedule('*/5 * * * *', () => {
+    outreachTick().catch((err) => log.error('Outreach tick failed', { error: String(err) }));
+  });
+  cron.schedule('*/15 * * * *', () => {
+    inboxTick().catch((err) => log.error('Inbox tick failed', { error: String(err) }));
   });
 
   // On boot, requeue anything that was mid-flight when the process stopped.

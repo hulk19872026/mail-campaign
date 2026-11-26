@@ -20,6 +20,7 @@ Railway. You use it in a browser — there is nothing to install and no commands
 | Maintenance leads | Everyone who clicked a maintenance button, with new → contacted → quoted → won/lost |
 | Integrations | Wave sync status and next nightly run, Resend status, connection tests, test email |
 | Settings | Company details, daily limit, batch size, delay, send time, nightly customer sync, addresses, password, activity log |
+| Prospects | Cold-outreach leads by list, with automatic weekday emails and follow-ups from a separate mailbox, opens and replies |
 | Help | Plain-language answers to the eight questions that come up most |
 
 ---
@@ -76,6 +77,9 @@ already lost, so re-upload those on the campaign.
 | `TWILIO_AUTH_TOKEN` | Railway service variables | Twilio auth token | Integrations → Twilio → Test connection |
 | `TWILIO_FROM_NUMBER` | Railway service variables | The Twilio number texts are sent from, `+1…` | Settings → Texting shows it |
 | `SMS_NUMBER` | Railway service variables | Number the email's "Text us" button opens (defaults to `+12126879116`) | Tap the button in a test email |
+| `OUTREACH_EMAIL` | Railway service variables | `tech@hulkautomationny.com` — the Google Workspace mailbox on the **separate** domain | Prospects → Automatic emails → Test connection |
+| `OUTREACH_APP_PASSWORD` | Railway service variables | A Google app password for that mailbox (16 letters) | Prospects → Automatic emails → Test connection |
+| `PROSPECT_FEED_TOKEN` | Railway service variables | Long random string (optional) | The weekly lead finder can add prospects |
 | `UPLOAD_DIR` | Already set in the Dockerfile | `/data/uploads` | A flyer survives a redeploy |
 
 Generate a session secret with: `openssl rand -base64 48`
@@ -406,6 +410,38 @@ Numbers are matched on their last ten digits, so `212 555 0101`, `(212) 555-0101
 `+12125550101` are all treated as the same line.
 
 ---
+
+## Automatic emails to prospects
+
+Prospects are businesses that never asked to hear from you, so they are **never** emailed
+through Resend — a complaint there could close the account your customer campaigns use.
+Instead the app sends through a separate Google Workspace mailbox on a separate domain
+(`tech@hulkautomationny.com`), using Gmail's own servers.
+
+**What it does**
+- Monday to Friday only, inside a time window (default 9:30–16:00 New York time).
+- Emails up to 5 new prospects a day (you choose the number and which lists), one at a time,
+  at least 10 minutes apart.
+- Sends email 2 on day 4 and email 3 on day 10, as replies in the same thread. Follow-ups
+  don't count towards the 5. Never more than 40 emails of any kind in a day.
+- Every 15 minutes it reads the mailbox's inbox: anyone who replies is set to **Replied**
+  and gets nothing more; a bounce sets the prospect to **Do not contact**.
+- Records opens with an invisible image (can be switched off). Opens are a hint, not proof.
+- Never emails anyone who is already a customer, has no email, or is Replied, Meeting,
+  Quoted, Won, Lost or Do not contact.
+- Adds your mailing address (Settings) and an opt-out line to every email, as US law requires.
+  It won't switch on without a mailing address.
+
+**Setup (once)**
+1. In the `tech@` Google account: **myaccount.google.com → Security → 2-Step Verification** → turn on.
+2. Then **myaccount.google.com/apppasswords** → name it "HULK app" → **Create** → copy the 16 letters.
+3. In Railway → your service → **Variables**, add `OUTREACH_EMAIL` and `OUTREACH_APP_PASSWORD`.
+4. In the app: **Settings** → fill in the mailing address.
+5. **Prospects → Automatic emails** → **Test connection** (both lines should say connected) →
+   tick the lists → edit the three emails → **Send me a test** for each.
+6. After about two weeks of warm-up, press **Switch on automatic emails**.
+
+The **Export CSV** button still works if you ever want to send a list by hand with Mailmeteor.
 
 ## Compliance notes
 

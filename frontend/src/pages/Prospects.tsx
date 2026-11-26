@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Eye, Pencil, Phone, Plus, Target, Trash2, Upload, UserPlus } from 'lucide-react';
+import { Ban, Download, Eye, Pencil, Phone, Plus, Target, Trash2, Upload, UserPlus } from 'lucide-react';
 import { api, errorText } from '../lib/api';
 import { formatDate } from '../lib/format';
+import { DoNotContact } from '../components/DoNotContact';
 import { OutreachBar, OutreachModal, type OutreachInfo } from '../components/OutreachSetup';
 import {
   Badge,
@@ -81,6 +82,7 @@ export default function Prospects() {
   const [openedNoReply, setOpenedNoReply] = useState(0);
   const [outreach, setOutreach] = useState<OutreachInfo | null>(null);
   const [outreachOpen, setOutreachOpen] = useState(false);
+  const [showDnd, setShowDnd] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<Prospect | 'new' | null>(null);
@@ -196,16 +198,29 @@ export default function Prospects() {
             onClick={() => {
               setList(l.id);
               setStatus('');
+              setShowDnd(false);
             }}
             className={`rounded-lg border px-3.5 py-2 text-sm font-medium ${
-              list === l.id ? 'border-accent bg-accent/10 text-white' : 'border-line text-muted hover:text-white'
+              list === l.id && !showDnd ? 'border-accent bg-accent/10 text-white' : 'border-line text-muted hover:text-white'
             }`}
           >
             {l.label} <span className="ml-1 text-xs text-muted">{countFor(l.id)}</span>
           </button>
         ))}
+        <button
+          onClick={() => setShowDnd(true)}
+          className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-2 text-sm font-medium ${
+            showDnd ? 'border-danger bg-danger/10 text-white' : 'border-line text-muted hover:text-white'
+          }`}
+        >
+          <Ban className="h-3.5 w-3.5" /> Do not contact
+        </button>
       </div>
 
+      {showDnd ? (
+        <DoNotContact onChanged={load} />
+      ) : (
+        <>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card>
           <p className="text-xs text-muted">Ready for outreach</p>
@@ -323,6 +338,9 @@ export default function Prospects() {
             })}
           </div>
         </Card>
+      )}
+
+        </>
       )}
 
       <ProspectForm
@@ -466,15 +484,15 @@ function ImportModal({
   const submit = async () => {
     setBusy(true);
     try {
-      const r = await api.post<{ added: number; duplicates: number; skipped: number }>('/api/prospects/import/csv', {
+      const r = await api.post<{ added: number; duplicates: number; skipped: number; blocked: number }>('/api/prospects/import/csv', {
         csv,
         list,
       });
       toast.push(
         'success',
         `Added ${r.added}. ${r.duplicates ? `${r.duplicates} already on a list. ` : ''}${
-          r.skipped ? `${r.skipped} rows had no name or email.` : ''
-        }`
+          r.skipped ? `${r.skipped} rows had no name or email. ` : ''
+        }${r.blocked ? `${r.blocked} on your Do not contact list were left out.` : ''}`
       );
       setCsv('');
       onClose();

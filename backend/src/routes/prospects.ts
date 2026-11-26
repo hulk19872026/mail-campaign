@@ -4,6 +4,7 @@ import { actorOf, handler, intParam } from '../lib/http';
 import { AppError } from '../lib/errors';
 import { audit } from '../services/activity';
 import { parseCsv } from './customers';
+import { addToDnc, blockedSql, rememberProspectEmail } from '../services/dnc';
 
 /**
  * Prospects are businesses that have never asked to hear from us. This router
@@ -116,6 +117,10 @@ prospectsRouter.post(
     const b = req.body ?? {};
     const business = text(b.business_name);
     if (!business) throw new AppError('Give the business a name.', 400);
+    const newEmail = emailOf(b.email);
+    if (newEmail && (await one(`SELECT 1 WHERE ${blockedSql('$1::text')}`, [newEmail]))) {
+      throw new AppError(`${newEmail} is on your Do not contact list, so it can't be added as a prospect.`, 400);
+    }
     const row = await one(
       `INSERT INTO prospects (list, business_name, contact_name, email, phone, address, category, notes, source_url)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *, to_char(next_follow_up, 'YYYY-MM-DD') AS next_follow_up`,
@@ -147,17 +152,23 @@ prospectsRouter.post(
 export async function importProspectRows(
   listValue: any,
   rows: Record<string, any>[]
-): Promise<{ added: number; duplicates: number; skipped: number }> {
+): Promise<{ added: number; duplicates: number; skipped: number; blocked: number }> {
   const list = listOf(listValue);
   let added = 0;
   let duplicates = 0;
   let skipped = 0;
+  let blocked = 0;
   for (const r of rows) {
     const business = text(r.business_name ?? r.business ?? r.company ?? r.company_name ?? r.name);
     let email = text(r.email ?? r.email_address).toLowerCase();
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) email = '';
     if (!business && !email) {
       skipped++;
+      continue;
+    }
+    // Someone on the do-not-contact list is never added back, by hand or by the lead finder.
+    if (email && (await one(`SELECT 1 WHERE ${blockedSql('$1::text')}`, [email]))) {
+      blocked++;
       continue;
     }
     const inserted = await one(
@@ -179,7 +190,7 @@ export async function importProspectRows(
     if (inserted) added++;
     else duplicates++;
   }
-  return { added, duplicates, skipped };
+  return { added, duplicates, skipped, blocked };
 }
 
 prospectsRouter.post(
@@ -208,6 +219,7 @@ prospectsRouter.get(
     const rows = await query(
       `${SELECT_PROSPECTS}
         WHERE p.list = $1 AND p.email <> '' AND p.status <> ALL($2::text[]) AND c.id IS NULL
+          AND NOT ${blockedSql('p.email')}
         ORDER BY p.business_name`,
       [list, NO_OUTREACH]
     );
@@ -231,6 +243,42 @@ prospectsRouter.get(
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="hulk-prospects-${list}.csv"`);
     res.send(`${header}\n${body}`);
+  })
+);
+
+/* ---------------------------- do-not-contact list ------------------------- */
+
+prospectsRouter.get(
+  '/dnd',
+  handler(async (_req, res) => {
+    const entries = await query(
+      `SELECT d.*, (SELECT count(*)::int FROM prospects p WHERE p.email <> ''
+                      AND (lower(p.email) = lower(d.value) OR split_part(lower(p.email), '@', 2) = lower(d.value))) AS prospects
+         FROM do_not_contact d ORDER BY d.created_at DESC, d.id DESC`
+    );
+    res.json({ entries });
+  })
+);
+
+prospectsRouter.post(
+  '/dnd',
+  handler(async (req, res) => {
+    const b = req.body ?? {};
+    const result = await addToDnc(String(b.value ?? ''), text(b.reason), actorOf(req));
+    await audit('dnd.added', { actor: actorOf(req), details: { value: b.value, ...result, entry: undefined } });
+    res.json(result);
+  })
+);
+
+prospectsRouter.delete(
+  '/dnd/:id',
+  handler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const row = await one<{ value: string }>('DELETE FROM do_not_contact WHERE id = $1 RETURNING value', [id]);
+    if (!row) throw new AppError('That entry was not found.', 404);
+    // Prospects it covered stay marked Do not contact; change them by hand if they really may be emailed.
+    await audit('dnd.removed', { actor: actorOf(req), details: { value: row.value } });
+    res.json({ ok: true });
   })
 );
 
@@ -293,6 +341,9 @@ prospectsRouter.put(
       if (err?.code === '23505') throw new AppError('Another prospect already uses that email.', 400);
       throw err;
     });
+    if (status === 'do_not_contact' && (row as any)?.email) {
+      await rememberProspectEmail((row as any).email, 'Marked Do not contact', actorOf(req));
+    }
     await audit('prospect.updated', {
       actor: actorOf(req),
       entity: 'prospect',

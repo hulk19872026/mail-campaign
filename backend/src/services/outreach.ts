@@ -10,6 +10,7 @@ import { AppError } from '../lib/errors';
 import { log } from '../lib/logger';
 import { audit, notify } from './activity';
 import { getSettings, type AppSettings } from './settings';
+import { blockedSql, rememberProspectEmail } from './dnc';
 
 /**
  * Automatic cold outreach to prospects.
@@ -291,7 +292,8 @@ async function stepTemplate(list: string, step: number) {
 /** Prospects that may be emailed: a real address, not a customer, never unsubscribed. */
 const ELIGIBLE = `
   p.email <> '' AND p.converted_customer_id IS NULL
-  AND NOT EXISTS (SELECT 1 FROM customers c WHERE lower(c.email) = lower(p.email))`;
+  AND NOT EXISTS (SELECT 1 FROM customers c WHERE lower(c.email) = lower(p.email))
+  AND NOT ${blockedSql('p.email')}`;
 
 async function nextFollowUp(lists: string[], day: string): Promise<(ProspectRow & { step: number }) | null> {
   return one(
@@ -376,12 +378,13 @@ async function sendStep(p: ProspectRow, step: number, s: OutreachSettings, app: 
 }
 
 async function markBounced(prospectId: number, why: string) {
-  const row = await one<{ business_name: string }>(
+  const row = await one<{ business_name: string; email: string }>(
     `UPDATE prospects SET status = 'do_not_contact', next_follow_up = NULL,
             notes = btrim(notes || E'\\n' || $2), updated_at = now()
-      WHERE id = $1 AND status <> 'do_not_contact' RETURNING business_name`,
+      WHERE id = $1 AND status <> 'do_not_contact' RETURNING business_name, email`,
     [prospectId, `Email bounced (${DateTime.now().toISODate()}): ${why}`]
   );
+  if (row) await rememberProspectEmail(row.email, `Bounced: ${why}`);
   if (row) await audit('prospect.bounced', { entity: 'prospect', entityId: prospectId, details: { why } });
 }
 
